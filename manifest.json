@@ -1,0 +1,22 @@
+{
+  "name": "五分钟地牢",
+  "short_name": "地牢冲刺",
+  "description": "5分钟一场微型冒险！自动攻击+手动走位，Roguelike技能升级",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#1a1a2e",
+  "theme_color": "#1a1a2e",
+  "icons": [
+    {
+      "src": "assets/ui/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "assets/ui/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
