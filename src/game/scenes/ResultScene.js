@@ -26,13 +26,8 @@ export class ResultScene {
   render() {
     const { renderer, LW, LH, run } = this;
     renderer.clear();
-    renderer.drawRect(0, 0, LW, LH, '#1a1a2e');
     renderer.applyTransform();
-    renderer.restoreTransform();
-    renderer.present();
-
-    // All text at native resolution
-    renderer.beginOverlay();
+    renderer.drawRect(0, 0, LW, LH, '#1a1a2e');
 
     const isEndless = run.isEndless && run.isEndless();
     let title, titleColor;
@@ -43,13 +38,13 @@ export class ResultScene {
       title = run.survived ? 'TIME UP!' : 'GAME OVER';
       titleColor = run.survived ? '#4ecdc4' : '#ff4444';
     }
-    renderer.drawTextO(title, LW / 2, LH * 0.15, {
-      color: titleColor, size: 22, align: 'center', bold: true,
+    renderer.drawText(title, LW / 2, LH * 0.15, {
+      color: titleColor, size: 20, align: 'center',
     });
 
     if (isEndless) {
-      renderer.drawTextO('无尽模式', LW / 2, LH * 0.15 + 28, {
-        color: '#ff6b35', size: 12, align: 'center',
+      renderer.drawText('无尽模式', LW / 2, LH * 0.15 + 26, {
+        color: '#ff6b35', size: 10, align: 'center',
       });
     }
 
@@ -62,34 +57,34 @@ export class ResultScene {
     ];
 
     stats.forEach(([label, value], i) => {
-      const y = LH * 0.28 + i * 32;
-      renderer.drawTextO(label, LW / 2 - 50, y, { color: '#888', size: 12, align: 'right' });
-      renderer.drawTextO(value, LW / 2 + 50, y, { color: '#fff', size: 14, align: 'left' });
+      const y = LH * 0.28 + i * 30;
+      renderer.drawText(label, LW / 2 - 50, y, { color: '#888', size: 10, align: 'right' });
+      renderer.drawText(value, LW / 2 + 50, y, { color: '#fff', size: 12, align: 'left' });
     });
 
-    renderer.drawTextO('─'.repeat(16), LW / 2, LH * 0.28 + stats.length * 32, {
-      color: '#333', size: 10, align: 'center',
+    renderer.drawText('─'.repeat(16), LW / 2, LH * 0.28 + stats.length * 30, {
+      color: '#333', size: 8, align: 'center',
     });
 
-    renderer.drawTextO('TOTAL', LW / 2 - 50, LH * 0.28 + stats.length * 32 + 14, {
-      color: '#888', size: 12, align: 'right',
+    renderer.drawText('TOTAL', LW / 2 - 50, LH * 0.28 + stats.length * 30 + 12, {
+      color: '#888', size: 10, align: 'right',
     });
-    renderer.drawTextO(`${run.score}`, LW / 2 + 50, LH * 0.28 + stats.length * 32 + 14, {
-      color: '#ffcc00', size: 18, align: 'left', bold: true,
+    renderer.drawText(`${run.score}`, LW / 2 + 50, LH * 0.28 + stats.length * 30 + 12, {
+      color: '#ffcc00', size: 16, align: 'left',
     });
 
-    // Buttons
     const drawBtn = (btn, text, color) => {
-      renderer.drawRectO(btn.x, btn.y, btn.w, btn.h, color);
-      renderer.drawRectO(btn.x + 2, btn.y + 2, btn.w - 4, btn.h - 4, '#1a1a2e');
-      renderer.drawTextO(text, btn.x + btn.w / 2, btn.y + 10, {
-        color, size: 14, align: 'center',
+      renderer.drawRect(btn.x, btn.y, btn.w, btn.h, color);
+      renderer.drawRect(btn.x + 2, btn.y + 2, btn.w - 4, btn.h - 4, '#1a1a2e');
+      renderer.drawText(text, btn.x + btn.w / 2, btn.y + 10, {
+        color, size: 12, align: 'center',
       });
     };
     drawBtn(this._restartBtn, '再来一局', '#4ecdc4');
     drawBtn(this._menuBtn, '返回菜单', '#ff6b35');
 
-    renderer.endOverlay();
+    renderer.restoreTransform();
+    renderer.present();
   }
 
   handleTap(lx, ly) {

@@ -1,17 +1,16 @@
 import { MathUtils } from '../../engine/MathUtils.js';
-import { WEAPONS, calcDmg, calcInterval } from '../data/weapons.js';
+import { WEAPONS, calcDmg, calcInterval, MAX_LEVEL } from '../data/weapons.js';
 
-/**
- * Unified weapon system.
- * Each player has Weapons component: { slots: { weaponId: { level, cooldown, ...state } } }
- * Iterates all unlocked weapons (level > 0), ticks cooldowns, fires when ready.
- */
 export class WeaponSystem {
   constructor(world, getBuffs, onMeleeHit) {
     this.world = world;
     this.getBuffs = getBuffs || (() => ({}));
     this.onMeleeHit = onMeleeHit || (() => {});
     this.orbitAngle = 0;
+  }
+
+  isMaxLevel(level) {
+    return level >= MAX_LEVEL;
   }
 
   update(dt) {
@@ -21,7 +20,10 @@ export class WeaponSystem {
       const buffs = this.getBuffs();
       const pt = player.components.Transform;
 
-      this.orbitAngle += dt * 3.5;
+      // Orbit speed: faster at max level
+      const orbitSlot = weapons.slots.melee_orbit;
+      const orbitSpeed = (orbitSlot && this.isMaxLevel(orbitSlot.level)) ? 5.0 : 3.5;
+      this.orbitAngle += dt * orbitSpeed;
 
       // Orbit weapon: continuous hit detection (not cooldown-gated for visuals)
       if (weapons.slots.melee_orbit && weapons.slots.melee_orbit.level > 0) {
@@ -76,29 +78,39 @@ export class WeaponSystem {
 
   _fireRanged(pt, dmg, def, level, buffs) {
     const rangeMult = buffs.rangeMult || 1;
-    const range = (def.baseSpeed || 220) * rangeMult; // proxy
+    const range = (def.baseSpeed || 220) * rangeMult;
     const nearest = this._findNearestEnemy(pt, 220 * rangeMult);
     if (!nearest) return false;
 
     const et = nearest.components.Transform;
     const angle = MathUtils.angleBetween(pt, et);
-    const count = (buffs.projectileCount || 1);
+    let count = (buffs.projectileCount || 1);
     const speed = (def.baseSpeed || 220) * (buffs.projectileSpeedMult || 1);
-    const pierce = buffs.pierce || 0;
+    let pierce = buffs.pierce || 0;
     const ricochet = buffs.ricochet || 0;
     const bigProj = buffs.bigProjectile || 0;
     const burn = buffs.burn || 0;
-    const projSize = 4 + bigProj * 3;
-    const finalDmg = dmg * (bigProj > 0 ? 1 + bigProj * 0.5 : 1);
-    const projColor = burn > 0 ? '#ff6b35' : '#ffcc00';
+    let projSize = 4 + bigProj * 3;
+    let finalDmg = dmg * (bigProj > 0 ? 1 + bigProj * 0.5 : 1);
+    let projColor = burn > 0 ? '#ff6b35' : '#ffcc00';
 
+    // Max level transformation: triple shot, larger bullets, gold color, extra pierce
+    if (this.isMaxLevel(level)) {
+      count += 2;
+      projSize += 2;
+      pierce += 2;
+      finalDmg *= 1.5;
+      projColor = '#ffd700';
+    }
+
+    const projImageKey = burn > 0 ? 'bullet_fire' : (bigProj > 0 ? 'bullet_big' : 'bullet');
     for (let i = 0; i < count; i++) {
       const spread = count > 1 ? (i - (count - 1) / 2) * 0.15 : 0;
       const a = angle + spread;
       const p = this.world.createEntity();
       this.world.addComponent(p, 'Transform', { x: pt.x, y: pt.y });
       this.world.addComponent(p, 'Velocity', { x: Math.cos(a) * speed, y: Math.sin(a) * speed });
-      this.world.addComponent(p, 'Sprite', { w: projSize, h: projSize, color: projColor });
+      this.world.addComponent(p, 'Sprite', { w: projSize, h: projSize, color: projColor, imageKey: projImageKey });
       this.world.addComponent(p, 'ProjectileTag', {});
       this.world.addComponent(p, 'Damage', { value: finalDmg });
       this.world.addComponent(p, 'Lifetime', { remaining: 2.0 });
@@ -109,12 +121,20 @@ export class WeaponSystem {
   }
 
   _slash(pt, dmg, def, level, buffs) {
-    const range = def.range * (1 + (level - 1) * def.rangePerLevel) * (buffs.rangeMult || 1);
+    let range = def.range * (1 + (level - 1) * def.rangePerLevel) * (buffs.rangeMult || 1);
+    let arc = def.arc;
+    let finalDmg = dmg;
+    // Max level transformation: 180° arc, +50% range, double damage
+    if (this.isMaxLevel(level)) {
+      arc = Math.PI;
+      range *= 1.5;
+      finalDmg *= 2;
+    }
     const nearest = this._findNearestEnemy(pt, range);
     if (!nearest) return false;
 
     const angle = MathUtils.angleBetween(pt, nearest.components.Transform);
-    const halfArc = def.arc / 2;
+    const halfArc = arc / 2;
     const hits = [];
 
     const enemies = this.world.query('Transform', 'EnemyTag', 'Health');
@@ -126,14 +146,14 @@ export class WeaponSystem {
       const eAngle = MathUtils.angleBetween(pt, et);
       let diff = Math.abs(((eAngle - angle + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
       if (diff <= halfArc) {
-        hits.push({ enemy: e, dmg });
+        hits.push({ enemy: e, dmg: finalDmg });
       }
     }
 
     // Visual: spawn a slash effect entity (lives ~0.18s)
     const fx = this.world.createEntity();
     this.world.addComponent(fx, 'Transform', { x: pt.x, y: pt.y });
-    this.world.addComponent(fx, 'SlashFX', { angle, range, arc: def.arc, life: 0.18, maxLife: 0.18 });
+    this.world.addComponent(fx, 'SlashFX', { angle, range, arc, life: 0.18, maxLife: 0.18, maxLevel: this.isMaxLevel(level) });
 
     if (hits.length > 0) this.onMeleeHit(hits, 'slash');
     return true;
@@ -142,10 +162,19 @@ export class WeaponSystem {
   _tickOrbit(pt, slot, buffs, dt) {
     const def = WEAPONS.melee_orbit;
     const level = slot.level;
-    const blades = def.baseBlades + (level - 1);
-    const dmg = calcDmg(def, level) * (buffs.damageMult || 1);
-    const radius = def.orbitRadius;
-    const hitCooldown = 0.4;
+    let blades = def.baseBlades + (level - 1);
+    let radius = def.orbitRadius;
+    let dmg = calcDmg(def, level) * (buffs.damageMult || 1);
+    // Max level transformation: 6 blades, +30% radius, +50% damage
+    if (this.isMaxLevel(level)) {
+      blades = 6;
+      radius *= 1.3;
+      dmg *= 1.5;
+      slot.maxLevel = true;
+    } else {
+      slot.maxLevel = false;
+    }
+    const hitCooldown = this.isMaxLevel(level) ? 0.25 : 0.4;
     if (!slot.hitTimers) slot.hitTimers = new Map();
     // decay timers
     for (const [id, t] of slot.hitTimers) {
@@ -175,20 +204,26 @@ export class WeaponSystem {
   }
 
   _burst(pt, dmg, def, level, buffs) {
-    const radius = def.radius * (1 + (level - 1) * def.radiusPerLevel) * (buffs.rangeMult || 1);
+    let radius = def.radius * (1 + (level - 1) * def.radiusPerLevel) * (buffs.rangeMult || 1);
+    let finalDmg = dmg;
+    // Max level transformation: +50% radius, double damage
+    if (this.isMaxLevel(level)) {
+      radius *= 1.5;
+      finalDmg *= 2;
+    }
     const enemies = this.world.query('Transform', 'EnemyTag', 'Health');
     const hits = [];
     for (const e of enemies) {
       if (!e.active) continue;
       const et = e.components.Transform;
       if (MathUtils.distance(pt, et) <= radius) {
-        hits.push({ enemy: e, dmg });
+        hits.push({ enemy: e, dmg: finalDmg });
       }
     }
     // Visual fx
     const fx = this.world.createEntity();
     this.world.addComponent(fx, 'Transform', { x: pt.x, y: pt.y });
-    this.world.addComponent(fx, 'BurstFX', { radius, life: 0.35, maxLife: 0.35 });
+    this.world.addComponent(fx, 'BurstFX', { radius, life: 0.35, maxLife: 0.35, maxLevel: this.isMaxLevel(level) });
 
     // Always trigger (it's an AoE around player, fires even with no enemies)
     if (hits.length > 0) this.onMeleeHit(hits, 'burst');
@@ -202,14 +237,22 @@ export class WeaponSystem {
 
     const angle = MathUtils.angleBetween(pt, nearest.components.Transform);
     const speed = def.baseSpeed;
-    const pierceCount = level + 2 + (buffs.pierce || 0); // pierce through more enemies per level
+    let pierceCount = level + 2 + (buffs.pierce || 0);
+    let projW = 14;
+    let projDmg = dmg;
+    // Max level transformation: infinite pierce, longer spear, +50% damage
+    if (this.isMaxLevel(level)) {
+      pierceCount = 999;
+      projW = 18;
+      projDmg *= 1.5;
+    }
 
     const p = this.world.createEntity();
     this.world.addComponent(p, 'Transform', { x: pt.x, y: pt.y });
     this.world.addComponent(p, 'Velocity', { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed });
-    this.world.addComponent(p, 'Sprite', { w: 14, h: 4, color: '#9b6ef3' });
+    this.world.addComponent(p, 'Sprite', { w: projW, h: 4, color: '#9b6ef3', imageKey: 'spear' });
     this.world.addComponent(p, 'ProjectileTag', {});
-    this.world.addComponent(p, 'Damage', { value: dmg });
+    this.world.addComponent(p, 'Damage', { value: projDmg });
     this.world.addComponent(p, 'Lifetime', { remaining: 2.5 });
     this.world.addComponent(p, 'HitTracker', { hitSet: new Set(), pierceLeft: pierceCount, ricochetLeft: 0 });
     return true;
@@ -220,16 +263,24 @@ export class WeaponSystem {
     if (!nearest) return false;
     const angle = MathUtils.angleBetween(pt, nearest.components.Transform);
     const speed = def.baseSpeed;
-    const explodeRadius = def.explodeRadius * (1 + (level - 1) * def.radiusPerLevel) * (buffs.rangeMult || 1);
+    let explodeRadius = def.explodeRadius * (1 + (level - 1) * def.radiusPerLevel) * (buffs.rangeMult || 1);
+    let projDmg = dmg;
+    let projSize = 9;
+    // Max level transformation: massive explosion, +50% damage, larger fireball
+    if (this.isMaxLevel(level)) {
+      explodeRadius *= 1.5;
+      projDmg *= 1.5;
+      projSize = 12;
+    }
     const p = this.world.createEntity();
     this.world.addComponent(p, 'Transform', { x: pt.x, y: pt.y });
     this.world.addComponent(p, 'Velocity', { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed });
-    this.world.addComponent(p, 'Sprite', { w: 9, h: 9, color: '#ff5522' });
+    this.world.addComponent(p, 'Sprite', { w: projSize, h: projSize, color: '#ff5522', imageKey: 'fireball' });
     this.world.addComponent(p, 'ProjectileTag', {});
-    this.world.addComponent(p, 'Damage', { value: dmg });
+    this.world.addComponent(p, 'Damage', { value: projDmg });
     this.world.addComponent(p, 'Lifetime', { remaining: 2.5 });
     this.world.addComponent(p, 'HitTracker', { hitSet: new Set(), pierceLeft: 0, ricochetLeft: 0 });
-    this.world.addComponent(p, 'ExplodeOnHit', { radius: explodeRadius, damage: dmg });
+    this.world.addComponent(p, 'ExplodeOnHit', { radius: explodeRadius, damage: projDmg, maxLevel: this.isMaxLevel(level) });
     return true;
   }
 
@@ -238,8 +289,15 @@ export class WeaponSystem {
     const nearest = this._findNearestEnemy(pt, range);
     if (!nearest) return false;
 
-    const jumps = def.baseJumps + (level - 1);
-    const jumpRange = def.jumpRange;
+    let jumps = def.baseJumps + (level - 1);
+    let jumpRange = def.jumpRange;
+    let finalDmg = dmg;
+    // Max level transformation: 8 jumps, +30% jump range, +50% damage
+    if (this.isMaxLevel(level)) {
+      jumps = 8;
+      jumpRange *= 1.3;
+      finalDmg *= 1.5;
+    }
     const hits = [];
     const chainPositions = [{ x: pt.x, y: pt.y }];
     const hitSet = new Set();
@@ -248,7 +306,7 @@ export class WeaponSystem {
     const enemies = this.world.query('Transform', 'EnemyTag', 'Health');
 
     for (let i = 0; i < jumps && current; i++) {
-      hits.push({ enemy: current, dmg });
+      hits.push({ enemy: current, dmg: finalDmg });
       hitSet.add(current.id);
       chainPositions.push({ x: currentPos.x, y: currentPos.y });
       // find next nearest unhit enemy within jumpRange
@@ -281,15 +339,25 @@ export class WeaponSystem {
     const angle = MathUtils.angleBetween(pt, nearest.components.Transform);
     const speed = def.baseSpeed;
     const travelDist = def.travelDist * (buffs.rangeMult || 1);
-    const p = this.world.createEntity();
-    this.world.addComponent(p, 'Transform', { x: pt.x, y: pt.y });
-    this.world.addComponent(p, 'Velocity', { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed });
-    this.world.addComponent(p, 'Sprite', { w: 8, h: 8, color: '#88ddff' });
-    this.world.addComponent(p, 'ProjectileTag', {});
-    this.world.addComponent(p, 'Damage', { value: dmg });
-    this.world.addComponent(p, 'Lifetime', { remaining: 4.0 });
-    this.world.addComponent(p, 'HitTracker', { hitSet: new Set(), pierceLeft: 99, ricochetLeft: 0 });
-    this.world.addComponent(p, 'Boomerang', { traveled: 0, maxDist: travelDist, returning: false });
+    let projDmg = dmg;
+    let count = 1;
+    // Max level transformation: double boomerang, +30% damage
+    if (this.isMaxLevel(level)) {
+      count = 2;
+      projDmg *= 1.3;
+    }
+    for (let i = 0; i < count; i++) {
+      const spreadAngle = angle + (count > 1 ? (i - 0.5) * 0.25 : 0);
+      const p = this.world.createEntity();
+      this.world.addComponent(p, 'Transform', { x: pt.x, y: pt.y });
+      this.world.addComponent(p, 'Velocity', { x: Math.cos(spreadAngle) * speed, y: Math.sin(spreadAngle) * speed });
+      this.world.addComponent(p, 'Sprite', { w: 8, h: 8, color: '#88ddff', imageKey: 'boomerang' });
+      this.world.addComponent(p, 'ProjectileTag', {});
+      this.world.addComponent(p, 'Damage', { value: projDmg });
+      this.world.addComponent(p, 'Lifetime', { remaining: 4.0 });
+      this.world.addComponent(p, 'HitTracker', { hitSet: new Set(), pierceLeft: 99, ricochetLeft: 0 });
+      this.world.addComponent(p, 'Boomerang', { traveled: 0, maxDist: travelDist, returning: false });
+    }
     return true;
   }
 
@@ -298,17 +366,28 @@ export class WeaponSystem {
     if (!nearest) return false;
     const angle = MathUtils.angleBetween(pt, nearest.components.Transform);
     const speed = def.baseSpeed;
-    const pierceCount = 2 + (level - 1) + (buffs.pierce || 0);
-    const slowDuration = def.slowDuration + (level - 1) * def.slowDurationPerLevel;
+    let pierceCount = 2 + (level - 1) + (buffs.pierce || 0);
+    let slowDuration = def.slowDuration + (level - 1) * def.slowDurationPerLevel;
+    let projDmg = dmg;
+    let projSize = 6;
+    // Max level transformation: freeze (root) on hit, double slow duration, +50% damage
+    const isMax = this.isMaxLevel(level);
+    if (isMax) {
+      pierceCount += 3;
+      slowDuration *= 2;
+      projDmg *= 1.5;
+      projSize = 8;
+    }
     const p = this.world.createEntity();
     this.world.addComponent(p, 'Transform', { x: pt.x, y: pt.y });
     this.world.addComponent(p, 'Velocity', { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed });
-    this.world.addComponent(p, 'Sprite', { w: 6, h: 6, color: '#7fdbff' });
+    this.world.addComponent(p, 'Sprite', { w: projSize, h: projSize, color: '#7fdbff', imageKey: 'icicle' });
     this.world.addComponent(p, 'ProjectileTag', {});
-    this.world.addComponent(p, 'Damage', { value: dmg });
+    this.world.addComponent(p, 'Damage', { value: projDmg });
     this.world.addComponent(p, 'Lifetime', { remaining: 2.0 });
     this.world.addComponent(p, 'HitTracker', { hitSet: new Set(), pierceLeft: pierceCount, ricochetLeft: 0 });
     this.world.addComponent(p, 'SlowOnHit', { duration: slowDuration, amount: def.slowAmount });
+    if (isMax) this.world.addComponent(p, 'RootOnHit', { duration: 1.0 });
     return true;
   }
 }

@@ -9,23 +9,26 @@ import { ProjectileSystem } from '../systems/ProjectileSystem.js';
 import { ContactDamageSystem } from '../systems/ContactDamageSystem.js';
 import { ExperienceSystem } from '../systems/ExperienceSystem.js';
 import { PickupSystem } from '../systems/PickupSystem.js';
-import { RunState } from '../run/RunState.js';
+import { EliteSkillSystem } from '../systems/EliteSkillSystem.js';
+import { RunState, TOTAL_DURATION } from '../run/RunState.js';
 import { SkillManager } from '../run/SkillManager.js';
 import { DungeonGenerator } from '../dungeon/DungeonGenerator.js';
 import { TILE } from '../dungeon/TileMap.js';
-import { BossController } from '../boss/BossController.js';
+import { FinalBossController } from '../boss/FinalBossController.js';
 import { DamageNumberSystem } from '../../ui/DamageNumberSystem.js';
 import { MathUtils } from '../../engine/MathUtils.js';
 import { FlowField } from '../../engine/FlowField.js';
 import { SupplySystem } from '../run/SupplySystem.js';
 import { WEAPONS } from '../data/weapons.js';
+import { getCharacterById } from '../data/characters.js';
 
 export class GameScene {
-  constructor(renderer, input, audio, particles, onLevelUp, onGameOver) {
+  constructor(renderer, input, audio, particles, assets, onLevelUp, onGameOver) {
     this.renderer = renderer;
     this.input = input;
     this.audio = audio;
     this.particles = particles;
+    this.assets = assets;
     this.onLevelUp = onLevelUp;
     this.onGameOver = onGameOver;
     this.LW = renderer.logicalWidth;
@@ -45,15 +48,26 @@ export class GameScene {
 
   onEnter(data) {
     const mode = data?.mode || 'normal';
+    const characterId = data?.characterId || 'archer'; // 默认射手
+    const character = getCharacterById(characterId);
+
     this.world = new World();
     this.run = new RunState();
     this.run.setMode(mode);
-    this.skillMgr = new SkillManager();
+    this.skillMgr = new SkillManager(characterId); // 传入角色ID用于羁绊系统
     this.expSystem = new ExperienceSystem(this.world);
     this.pickupSystem = new PickupSystem(this.world);
     this.pickupSystem.setExpSystem(this.expSystem);
     this.dmgNumbers = new DamageNumberSystem();
     this.collision = new CollisionSystem(64);
+
+    // 保存角色信息
+    this.characterId = characterId;
+    this.character = character;
+
+    // Boss boundary state (结界状态)
+    this.bossBoundaryActive = false;
+    this.bossBoundaryRect = null; // { minX, maxX, minY, maxY }
 
     const getBuffs = () => this.skillMgr.getBuffs();
 
@@ -68,12 +82,15 @@ export class GameScene {
     const LW = map.width;
     const LH = map.height;
 
+    // Set world bounds for particle system (bounce effect)
+    this.particles.setWorldBounds({ minX: 0, maxX: LW, minY: 0, maxY: LH });
+
     this.camera = new Camera(this.LW, this.LH, LW, LH);
 
     this.movement = new MovementSystem(this.world, this.input);
     this.movement.setBounds(LW, LH);
     this.autoAttack = new WeaponSystem(this.world, getBuffs, (hits, weaponType) => this._onMeleeHit(hits, weaponType));
-    this.enemySpawn = new EnemySpawnSystem(this.world, LW, LH);
+    this.enemySpawn = new EnemySpawnSystem(this.world, LW, LH, this.run);
     this.enemySpawn.setTileMap(this.tileMap);
     this.ai = new AISystem(this.world, getBuffs);
     this.flowField = new FlowField(this.tileMap);
@@ -85,19 +102,49 @@ export class GameScene {
     this.projectile = new ProjectileSystem(this.world, LW, LH, (hits) => this._onHits(hits));
     this.projectile.setTileMap(this.tileMap);
     this.contactDmg = new ContactDamageSystem(this.world, (p, e) => this._onPlayerHit(p, e), getBuffs);
+    this.eliteSkills = new EliteSkillSystem(this.world, LW, LH, (x, y, angle, speed, color, damage) => {
+      const p = this.world.createEntity();
+      this.world.addComponent(p, 'Transform', { x, y });
+      this.world.addComponent(p, 'Velocity', { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed });
+      this.world.addComponent(p, 'Sprite', { w: 5, h: 5, color, imageKey: 'elite_projectile' });
+      this.world.addComponent(p, 'ProjectileTag', {});
+      this.world.addComponent(p, 'Damage', { value: damage });
+      this.world.addComponent(p, 'Lifetime', { remaining: 3.0 });
+    });
 
     // Boss
-    this.boss = new BossController(this.world, LW, LH);
+    this.boss = new FinalBossController(this.world, LW, LH, {
+      particles: this.particles,
+      camera: this.camera,
+      audio: this.audio,
+      enemySpawn: this.enemySpawn,
+      dmgNumbers: this.dmgNumbers,
+      gameTime: 0, // Will be updated each frame
+    });
     this.boss.onDeath = () => {
       this.run.bossDefeated = true;
       this.audio.playLevelUp();
       this.bossDefeated = true;
-      this.camera.shake(8, 1.0);
+      this.camera.shake(12, 2.0);
       if (this.boss.entity) {
         const bt = this.boss.entity.components.Transform;
-        this.particles.emit(bt.x, bt.y, 30, { colors: ['#ff6b35', '#ffcc00', '#fff'], speed: 150, life: 1.2 });
+        // Boss击杀特效：圆形粒子、发光、重力、拖尾
+        this.particles.emit(bt.x, bt.y, 50, {
+          colors: ['#ff0000', '#ff4400', '#ff8800', '#fff'],
+          speed: 200,
+          life: 1.5,
+          sizeMin: 2,
+          sizeMax: 6,
+          shape: 'circle',
+          gravity: 50,
+          glow: true,
+          glowIntensity: 1.5,
+          trail: true,
+          trailLength: 8,
+          drag: 0.95,
+        });
       }
-      this.run.addScore(500);
+      this.run.addScore(1000);
     };
 
     this.expSystem.onLevelUp = (level) => this._onLevelUp(level);
@@ -117,12 +164,23 @@ export class GameScene {
     // Player
     const px = spawnRoom ? spawnRoom.cx * map.tileSize + map.tileSize / 2 : LW / 2;
     const py = spawnRoom ? spawnRoom.cy * map.tileSize + map.tileSize / 2 : LH * 0.6;
+
+    // 根据角色设置初始属性
+    const charStats = this.character ? this.character.baseStats : { hp: 100, speed: 80 };
+    const playerHp = charStats.hp;
+    const playerSpeed = charStats.speed;
+
     this.player = this.world.createEntity();
     this.world.addComponent(this.player, 'Transform', { x: px, y: py });
-    this.world.addComponent(this.player, 'Sprite', { w: 14, h: 14, color: '#4ecdc4' });
-    this.world.addComponent(this.player, 'Health', { hp: 6, maxHp: 6, invTimer: 0 });
+    this.world.addComponent(this.player, 'Sprite', {
+      w: 14,
+      h: 14,
+      color: this.character ? this.character.color : '#4ecdc4',
+      imageKey: this.characterId || 'player'
+    });
+    this.world.addComponent(this.player, 'Health', { hp: playerHp, maxHp: playerHp, invTimer: 0 });
     this.world.addComponent(this.player, 'PlayerTag', {});
-    this.world.addComponent(this.player, 'PlayerSpeed', { value: 120 });
+    this.world.addComponent(this.player, 'PlayerSpeed', { value: playerSpeed });
     this.world.addComponent(this.player, 'Weapons', {
       slots: {
         ranged:          { level: 1, cooldown: 0 },
@@ -203,18 +261,32 @@ export class GameScene {
       const sx = t.x - cam.offsetX;
       const sy = t.y - cam.offsetY;
       const alpha = Math.max(0, fx.life / fx.maxLife);
+      const slashImg = this.assets.get('slash');
       ctx.save();
-      ctx.globalAlpha = alpha * 0.7;
-      ctx.fillStyle = '#ffffff';
-      ctx.beginPath();
-      ctx.moveTo(sx, sy);
-      ctx.arc(sx, sy, fx.range, fx.angle - fx.arc / 2, fx.angle + fx.arc / 2);
-      ctx.closePath();
-      ctx.fill();
-      ctx.globalAlpha = alpha;
-      ctx.strokeStyle = '#fff';
-      ctx.lineWidth = 2;
-      ctx.stroke();
+      ctx.globalAlpha = alpha * (fx.maxLevel ? 0.85 : 0.7);
+      if (slashImg) {
+        ctx.translate(sx, sy);
+        ctx.rotate(fx.angle);
+        const scale = (fx.range * 2) / slashImg.width;
+        ctx.scale(scale, scale);
+        if (fx.maxLevel) {
+          // Max level: add golden glow overlay
+          ctx.filter = 'brightness(1.5) saturate(1.5)';
+        }
+        ctx.drawImage(slashImg, -slashImg.width / 2, -slashImg.height / 2);
+        if (fx.maxLevel) ctx.filter = 'none';
+      } else {
+        ctx.fillStyle = fx.maxLevel ? '#ffd700' : '#ffffff';
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.arc(sx, sy, fx.range, fx.angle - fx.arc / 2, fx.angle + fx.arc / 2);
+        ctx.closePath();
+        ctx.fill();
+        ctx.globalAlpha = alpha;
+        ctx.strokeStyle = fx.maxLevel ? '#ffa500' : '#fff';
+        ctx.lineWidth = fx.maxLevel ? 3 : 2;
+        ctx.stroke();
+      }
       ctx.restore();
     }
 
@@ -227,16 +299,28 @@ export class GameScene {
       const sy = t.y - cam.offsetY;
       const alpha = Math.max(0, fx.life / fx.maxLife);
       const r = fx.radius * (1 - alpha) + fx.radius * 0.5;
+      const blastImg = this.assets.get('blast');
       ctx.save();
-      ctx.globalAlpha = alpha * 0.5;
-      ctx.strokeStyle = '#ffaa44';
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.arc(sx, sy, r, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.globalAlpha = alpha * 0.2;
-      ctx.fillStyle = '#ff8822';
-      ctx.fill();
+      ctx.globalAlpha = alpha * (fx.maxLevel ? 0.65 : 0.5);
+      if (blastImg) {
+        ctx.translate(sx, sy);
+        const scale = (r * 2) / blastImg.width;
+        ctx.scale(scale, scale);
+        if (fx.maxLevel) {
+          ctx.filter = 'brightness(1.8) saturate(2)';
+        }
+        ctx.drawImage(blastImg, -blastImg.width / 2, -blastImg.height / 2);
+        if (fx.maxLevel) ctx.filter = 'none';
+      } else {
+        ctx.strokeStyle = fx.maxLevel ? '#ff5500' : '#ffaa44';
+        ctx.lineWidth = fx.maxLevel ? 5 : 3;
+        ctx.beginPath();
+        ctx.arc(sx, sy, r, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.globalAlpha = alpha * (fx.maxLevel ? 0.35 : 0.2);
+        ctx.fillStyle = fx.maxLevel ? '#ff3300' : '#ff8822';
+        ctx.fill();
+      }
       ctx.restore();
     }
 
@@ -274,10 +358,12 @@ export class GameScene {
     const weapons = this.player?.components.Weapons;
     if (weapons && weapons.slots.melee_orbit && weapons.slots.melee_orbit.level > 0) {
       const orbit = weapons.slots.melee_orbit;
-      const blades = 2 + (orbit.level - 1);
-      const radius = 35;
+      const blades = orbit.maxLevel ? 6 : (2 + (orbit.level - 1));
+      const radius = orbit.maxLevel ? 45 : 35;
       const ang0 = this.autoAttack.orbitAngle;
       const pt = this.player.components.Transform;
+      const bladeImg = this.assets.get('spinning_blade');
+      const bladeSize = orbit.maxLevel ? 20 : 16;
       for (let i = 0; i < blades; i++) {
         const ang = ang0 + (Math.PI * 2 / blades) * i;
         const bx = pt.x + Math.cos(ang) * radius - cam.offsetX;
@@ -285,10 +371,20 @@ export class GameScene {
         ctx.save();
         ctx.translate(bx, by);
         ctx.rotate(ang + Math.PI / 2);
-        ctx.fillStyle = '#bb88ff';
-        ctx.fillRect(-2, -6, 4, 12);
-        ctx.fillStyle = '#fff';
-        ctx.fillRect(-1, -6, 2, 12);
+        if (bladeImg) {
+          const scale = bladeSize / bladeImg.width;
+          ctx.scale(scale, scale);
+          if (orbit.maxLevel) {
+            ctx.filter = 'brightness(1.5) saturate(2)';
+          }
+          ctx.drawImage(bladeImg, -bladeImg.width / 2, -bladeImg.height / 2);
+          if (orbit.maxLevel) ctx.filter = 'none';
+        } else {
+          ctx.fillStyle = orbit.maxLevel ? '#ff88ff' : '#bb88ff';
+          ctx.fillRect(-2, -6, 4, 12);
+          ctx.fillStyle = '#fff';
+          ctx.fillRect(-1, -6, 2, 12);
+        }
         ctx.restore();
       }
     }
@@ -310,34 +406,83 @@ export class GameScene {
 
   _onHits(hits) {
     const buffs = this._currentBuffs;
+    let totalDamage = 0;
+
     for (const { projectile, enemy } of hits) {
       if (!enemy.active) continue;
       const dmg = projectile.components.Damage.value;
       enemy.components.Health.hp -= dmg;
+      totalDamage += dmg;
 
       const pt = enemy.components.Transform;
       const projColor = projectile.components.Sprite.color;
-      this.dmgNumbers.add(pt.x, pt.y, dmg, { color: projColor });
-      this.particles.emit(pt.x, pt.y, 3, { colors: ['#ffcc00'], speed: 40 });
+
+      // 增强的伤害数字和打击反馈
+      const dmgSize = dmg > 30 ? 14 : dmg > 15 ? 12 : 10;
+      this.dmgNumbers.add(pt.x, pt.y, dmg, { color: projColor, size: dmgSize });
+
+      // 打击粒子效果增强（根据伤害值）
+      const particleCount = Math.min(10, Math.max(3, Math.floor(dmg / 5)));
+      this.particles.emit(pt.x, pt.y, particleCount, {
+        colors: ['#ffcc00', projColor],
+        speed: 40 + dmg * 2,
+        shape: 'circle',
+        glow: dmg > 20, // 高伤害时发光
+        glowIntensity: 1.2,
+        life: 0.4,
+      });
 
       // Slow on hit (ice shard / controller slow)
       const slow = projectile.components.SlowOnHit;
       if (slow) {
         enemy.components.Slow = { duration: slow.duration, amount: slow.amount };
-        this.particles.emit(pt.x, pt.y, 4, { colors: ['#7fdbff', '#fff'], speed: 30, life: 0.5 });
+        // 冰冻特效：圆形粒子、发光、重力
+        this.particles.emit(pt.x, pt.y, 4, {
+          colors: ['#7fdbff', '#fff'],
+          speed: 30,
+          life: 0.5,
+          shape: 'circle',
+          gravity: 20,
+          glow: true,
+          glowIntensity: 0.8,
+        });
       }
 
       // Root on hit (controller root projectile)
       const rootHit = projectile.components.RootOnHit;
       if (rootHit) {
         enemy.components.Root = { duration: rootHit.duration };
-        this.particles.emit(pt.x, pt.y, 4, { colors: ['#1abc9c', '#fff'], speed: 30, life: 0.5 });
+        // 定身特效：圆形粒子、发光
+        this.particles.emit(pt.x, pt.y, 4, {
+          colors: ['#1abc9c', '#fff'],
+          speed: 30,
+          life: 0.5,
+          shape: 'circle',
+          glow: true,
+          glowIntensity: 1,
+        });
       }
 
       // Explode on hit (fireball)
       const explode = projectile.components.ExplodeOnHit;
       if (explode) {
-        this.particles.emit(pt.x, pt.y, 20, { colors: ['#ff5522', '#ffaa00', '#fff'], speed: 150, life: 0.7, sizeMax: 4 });
+        // 火球爆炸特效：圆形粒子、发光、重力、拖尾
+      this.particles.emit(pt.x, pt.y, 20, {
+        colors: ['#ff5522', '#ffaa00', '#fff'],
+        speed: 150,
+        life: 0.7,
+        sizeMin: 2,
+        sizeMax: 4,
+        shape: 'circle',
+        gravity: 80,
+        glow: true,
+        glowIntensity: 2,
+        trail: true,
+        trailLength: 5,
+        scaleAnimation: true,
+        scaleStart: 1.5,
+        scaleEnd: 0.2,
+      });
         const nearbyEnemies = this.world.query('Transform', 'EnemyTag', 'Health');
         for (const ne of nearbyEnemies) {
           if (ne.id === enemy.id || !ne.active) continue;
@@ -394,6 +539,13 @@ export class GameScene {
         this.audio.playHit();
       }
     }
+
+    // 批量打击的屏幕震动反馈（根据总伤害）
+    if (totalDamage > 0) {
+      const shakeIntensity = Math.min(8, Math.max(1, totalDamage / 10));
+      const shakeDuration = Math.min(0.4, Math.max(0.1, totalDamage / 50));
+      this.camera.shake(shakeIntensity, shakeDuration);
+    }
   }
 
   _onPlayerHit(player, enemy) {
@@ -418,6 +570,39 @@ export class GameScene {
     }
   }
 
+  // ── Boss Boundary Methods (结界方法) ──
+
+  _activateBossBoundary() {
+    // Calculate boundary based on current camera viewport
+    const cam = this.camera;
+    const pt = this.player.components.Transform;
+
+    // Boundary is centered on player position with viewport size
+    const boundaryWidth = this.LW * 0.6; // 60% of viewport width
+    const boundaryHeight = this.LH * 0.6; // 60% of viewport height
+
+    const minX = Math.max(0, pt.x - boundaryWidth / 2);
+    const maxX = Math.min(this.tileMap.width, pt.x + boundaryWidth / 2);
+    const minY = Math.max(0, pt.y - boundaryHeight / 2);
+    const maxY = Math.min(this.tileMap.height, pt.y + boundaryHeight / 2);
+
+    this.bossBoundaryRect = { minX, maxX, minY, maxY };
+    this.bossBoundaryActive = true;
+
+    // Visual feedback
+    this.camera.shake(5, 0.4);
+    console.log('Boss boundary activated:', this.bossBoundaryRect);
+  }
+
+  _deactivateBossBoundary() {
+    this.bossBoundaryActive = false;
+    this.bossBoundaryRect = null;
+
+    // Visual feedback
+    this.camera.shake(3, 0.3);
+    console.log('Boss boundary deactivated');
+  }
+
   _spawnHazard(x, y) {
     const e = this.world.createEntity();
     this.world.addComponent(e, 'Transform', { x, y });
@@ -433,7 +618,20 @@ export class GameScene {
     const boom = e.components.ExplodeOnDeath;
     if (!boom) { this.world.removeEntity(e.id); return; }
 
-    this.particles.emit(et.x, et.y, 15, { colors: ['#ff4444', '#ff8800', '#ffcc00'], speed: 120 });
+    // 爆炸敌人死亡特效：圆形粒子、发光、重力、拖尾
+    this.particles.emit(et.x, et.y, 15, {
+      colors: ['#ff4444', '#ff8800', '#ffcc00'],
+      speed: 120,
+      sizeMin: 2,
+      sizeMax: 4,
+      shape: 'circle',
+      gravity: 60,
+      glow: true,
+      glowIntensity: 1.5,
+      trail: true,
+      trailLength: 5,
+      life: 0.6,
+    });
     this.camera.shake(5, 0.3);
 
     // Damage nearby enemies
@@ -489,11 +687,28 @@ export class GameScene {
   _onLevelUp(level) {
     this.audio.playLevelUp();
     const pt = this.player.components.Transform;
-    this.particles.emit(pt.x, pt.y, 30, { colors: ['#4ecdc4', '#fff', '#ffcc00', '#ff6b35'], speed: 150, life: 1.2 });
+    // 升级特效：圆形粒子、发光、重力、旋转、拖尾
+    this.particles.emit(pt.x, pt.y, 30, {
+      colors: ['#4ecdc4', '#fff', '#ffcc00', '#ff6b35'],
+      speed: 150,
+      life: 1.2,
+      sizeMin: 2,
+      sizeMax: 5,
+      shape: 'circle',
+      gravity: 30,
+      glow: true,
+      glowIntensity: 1.2,
+      rotationSpeed: 3,
+      trail: true,
+      trailLength: 6,
+      scaleAnimation: true,
+      scaleStart: 2,
+      scaleEnd: 0.5,
+    });
     this.camera.shake(3, 0.3);
     this._levelUpFlash = 0.5;
     this.paused = true;
-    const choices = this.skillMgr.rollChoices(3, level);
+    const choices = this.skillMgr.rollChoices(3, level, this.player);
     this.onLevelUp(level, choices, (skill) => {
       this.skillMgr.acquire(skill);
       this.run.addSkill(skill);
@@ -533,44 +748,41 @@ export class GameScene {
     if (this._levelUpFlash > 0) this._levelUpFlash -= dt;
     if (this.paused) return;
 
-    this.run.gameTime += dt;
+    // Check if any boss is active (final boss or mini bosses)
+    const bossActive = this.boss && this.boss.active;
+    const miniBossesActive = this.supplySystem && this.supplySystem.miniBosses && this.supplySystem.miniBosses.length > 0;
+    const inBossFight = bossActive || miniBossesActive;
 
-    if (!this.run.isEndless()) {
-      this.run.timeRemaining = Math.max(0, 300 - this.run.gameTime);
-      if (this.run.timeRemaining <= 0) {
-        this.run.survived = true;
-        this.onGameOver(this.run);
-        return;
+    // Only update timer if not in boss fight
+    if (!inBossFight) {
+      this.run.gameTime += dt;
+      this.run.updateStage();
+
+      if (!this.run.isEndless()) {
+        this.run.timeRemaining = Math.max(0, TOTAL_DURATION - this.run.gameTime);
+        if (this.run.timeRemaining <= 0) {
+          this.run.survived = true;
+          this.onGameOver(this.run);
+          return;
+        }
       }
     }
 
     const playerAlive = this.player && this.player.active && this.player.components.Health.hp > 0;
 
     if (playerAlive) {
-      if (!this.input.isKeyboardMoving()) {
-        const ptr = this.input.getPointerScreenPos();
-        if (ptr) {
-          const logical = this.renderer.screenToLogical(ptr.x, ptr.y);
-          const targetWX = logical.x + this.camera.x;
-          const targetWY = logical.y + this.camera.y;
-          const pt = this.player.components.Transform;
-          const dx = targetWX - pt.x;
-          const dy = targetWY - pt.y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist > 8) {
-            this.input.direction.x = dx / dist;
-            this.input.direction.y = dy / dist;
-          } else {
-            this.input.direction.x = 0;
-            this.input.direction.y = 0;
-          }
-        }
-      }
       const pt = this.player.components.Transform;
       const oldPX = pt.x;
       const oldPY = pt.y;
       this.movement.update(dt);
       this.collision.resolveWalls(this.player, this.tileMap, oldPX, oldPY);
+
+      // Boss boundary constraint (结界边界限制)
+      if (this.bossBoundaryActive && this.bossBoundaryRect) {
+        const rect = this.bossBoundaryRect;
+        pt.x = Math.max(rect.minX, Math.min(rect.maxX, pt.x));
+        pt.y = Math.max(rect.minY, Math.min(rect.maxY, pt.y));
+      }
     }
 
     if (playerAlive) this.autoAttack.update(dt);
@@ -588,9 +800,12 @@ export class GameScene {
           const bossRoom = this.rooms.find(r => r.isBoss) || this.rooms[this.rooms.length - 1];
           const bx = bossRoom.cx * this.tileMap.tileSize + this.tileMap.tileSize / 2;
           const by = bossRoom.cy * this.tileMap.tileSize + this.tileMap.tileSize / 2;
-          const bossHp = 40 + Math.floor(this.run.gameTime / 30) * 10;
+          const bossHp = 1500; // Adjusted for player 100HP baseline (medium difficulty)
           this.boss.spawn(bx, by, bossHp);
-          this.camera.shake(6, 0.5);
+          this.camera.shake(10, 1.0);
+
+          // Activate boss boundary (结界) when boss spawns
+          this._activateBossBoundary();
         }
       }
 
@@ -605,11 +820,33 @@ export class GameScene {
     if (this.supplySystem) {
       this.supplySystem.setGameTime(this.run.gameTime);
       this.supplySystem.update(dt, this.player);
+
+      // Detect mini boss spawn and activate boundary
+      const miniBossesActive = this.supplySystem.miniBosses && this.supplySystem.miniBosses.length > 0;
+      if (miniBossesActive && !this.bossBoundaryActive) {
+        this._activateBossBoundary();
+      }
     }
 
     // Boss update
     if (this.boss.active) {
+      // Update boss deps gameTime
+      if (this.boss.deps) {
+        this.boss.deps.gameTime = this.run.gameTime;
+      }
       this.boss.update(dt);
+    } else if (this.bossBoundaryActive && this.bossSpawned) {
+      // Final boss defeated - deactivate boundary
+      this._deactivateBossBoundary();
+    }
+
+    // Check if all mini bosses are defeated
+    if (this.supplySystem && this.supplySystem.miniBosses) {
+      const miniBossesActive = this.supplySystem.miniBosses.length > 0;
+      if (!miniBossesActive && this.bossBoundaryActive && !this.boss.active) {
+        // All mini bosses defeated and no final boss - deactivate boundary
+        this._deactivateBossBoundary();
+      }
     }
 
     // Update flow field for enemy pathfinding
@@ -619,9 +856,16 @@ export class GameScene {
     }
 
     // Wall collision for ALL enemies (use last frame's resolved position as old)
-    const enemyOldPos = this._lastFrameEnemyPos || new Map();
+    // 使用预分配的Map避免每帧创建新对象
+    if (!this._enemyOldPosPool) {
+      this._enemyOldPosPool = new Map();
+    }
+    const enemyOldPos = this._lastFrameEnemyPos || this._enemyOldPosPool;
+
     this.ai.update(dt);
 
+    // 重用Map而不是每帧创建新的
+    this._enemyOldPosPool.clear();
     for (const e of this.world.query('Transform', 'EnemyTag', 'Collider')) {
       if (!e.active) continue;
       const old = enemyOldPos.get(e.id);
@@ -632,18 +876,20 @@ export class GameScene {
       }
     }
 
-    // Save resolved positions for next frame
-    this._lastFrameEnemyPos = new Map();
+    // 保存已解决的位置供下一帧使用（复用Map）
+    this._enemyOldPosPool.clear();
     for (const e of this.world.query('Transform', 'EnemyTag', 'Collider')) {
       if (e.active) {
         const t = e.components.Transform;
-        this._lastFrameEnemyPos.set(e.id, { x: t.x, y: t.y });
+        this._enemyOldPosPool.set(e.id, { x: t.x, y: t.y });
       }
     }
+    this._lastFrameEnemyPos = this._enemyOldPosPool;
 
     this.projectile.update(dt);
     this.projectile.checkHits();
     this.contactDmg.update(dt);
+    this.eliteSkills.update(dt, this.run.gameTime);
     this.expSystem.update(dt);
     this.pickupSystem.update(dt, this._currentBuffs.magnetMult || 1);
     this.dmgNumbers.update(dt);
@@ -705,10 +951,11 @@ export class GameScene {
           renderer.drawRect(sx, sy, ts, ts, '#3d3d5c');
           renderer.drawRect(sx, sy, ts, ts * 0.5, '#555580');
         } else if (tile === TILE.FLOOR) {
-          if ((c + r) % 2 === 0) {
-            renderer.drawRect(sx, sy, ts, ts, '#222238');
+          const floorImg = (c + r) % 3 === 0 ? this.assets.get('floor_c') : (c + r) % 2 === 0 ? this.assets.get('floor_a') : this.assets.get('floor_b');
+          if (floorImg) {
+            renderer.drawSprite(floorImg, sx + ts / 2, sy + ts / 2, { scale: ts / floorImg.width });
           } else {
-            renderer.drawRect(sx, sy, ts, ts, '#282845');
+            renderer.drawRect(sx, sy, ts, ts, (c + r) % 2 === 0 ? '#222238' : '#282845');
           }
         }
       }
@@ -735,7 +982,13 @@ export class GameScene {
         const sx = t.x - cam.offsetX;
         const sy = t.y - cam.offsetY;
         if (sx < -50 || sx > LW + 50 || sy < -50 || sy > LH + 50) continue;
-        renderer.drawRect(sx - s.w / 2, sy - s.h / 2, s.w, s.h, s.color);
+        const img = s.imageKey ? this.assets.get(s.imageKey) : null;
+        if (img) {
+          const scale = s.w / img.width;
+          renderer.drawSprite(img, sx, sy, { scale });
+        } else {
+          renderer.drawRect(sx - s.w / 2, sy - s.h / 2, s.w, s.h, s.color);
+        }
       }
     };
 
@@ -799,7 +1052,27 @@ export class GameScene {
         renderer.setAlpha(1);
       }
 
-      renderer.drawRect(sx - s.w / 2, sy - s.h / 2, s.w, s.h, s.color);
+      // PhaseShift visual (elite invulnerability)
+      if (e.components.PhaseShift) {
+        const phasePulse = Math.sin(this.run.gameTime * 8) * 0.3 + 0.4;
+        renderer.setAlpha(phasePulse);
+        renderer.drawCircle(sx, sy, s.w * 1.5, '#bdc3c7');
+        renderer.setAlpha(1);
+      }
+
+      const eImg = s.imageKey ? this.assets.get(s.imageKey) : null;
+      // Apply phase shift alpha to sprite
+      const phaseAlpha = e.components.PhaseShift ? 0.3 : 1;
+      if (eImg) {
+        renderer.setAlpha(phaseAlpha);
+        const scale = s.w / eImg.width;
+        renderer.drawSprite(eImg, sx, sy, { scale });
+        renderer.setAlpha(1);
+      } else {
+        renderer.setAlpha(phaseAlpha);
+        renderer.drawRect(sx - s.w / 2, sy - s.h / 2, s.w, s.h, s.color);
+        renderer.setAlpha(1);
+      }
 
       if (e.components.Health.maxHp > 1) {
         const hbw = s.w + 4;
@@ -871,10 +1144,13 @@ export class GameScene {
       }
 
       if (visible) {
-        renderer.drawRect(sx - ps.w / 2, sy - ps.h / 2, ps.w, ps.h, ps.color);
-        renderer.ctx.strokeStyle = '#2ab7a9';
-        renderer.ctx.lineWidth = 1;
-        renderer.ctx.strokeRect(sx - ps.w / 2 - 1, sy - ps.h / 2 - 1, ps.w + 2, ps.h + 2);
+        const playerImg = this.assets.get('player_front');
+        if (playerImg) {
+          const scale = ps.w / playerImg.width;
+          renderer.drawSprite(playerImg, sx, sy, { scale });
+        } else {
+          renderer.drawRect(sx - ps.w / 2, sy - ps.h / 2, ps.w, ps.h, ps.color);
+        }
 
         // Thorns aura visual
         const thorns = this._currentBuffs.thorns || 0;
@@ -907,21 +1183,76 @@ export class GameScene {
     this.dmgNumbers.render(renderer.ctx);
     renderer.ctx.restore();
 
-    // Level-up flash overlay (on buffer before present)
+    // Boss warning text
+    if (this.bossWarningTimer > 0) {
+      const flash = Math.floor(this.bossWarningTimer * 6) % 2 === 0;
+      if (flash) {
+        renderer.drawText('WARNING', LW / 2, LH * 0.4, {
+          color: '#ff4444', size: 24, align: 'center', bold: true,
+        });
+        renderer.drawText('BOSS APPROACHING', LW / 2, LH * 0.4 + 30, {
+          color: '#ff8888', size: 10, align: 'center',
+        });
+      }
+    }
+
+    // Boss skills warnings and phase transition effects
+    if (this.boss && this.boss.active) {
+      this.boss.render(renderer, cam);
+    }
+
+    // Boss boundary visual (结界边界渲染)
+    if (this.bossBoundaryActive && this.bossBoundaryRect) {
+      const rect = this.bossBoundaryRect;
+      const ctx = renderer.ctx;
+
+      // Boundary edges (red pulsing lines)
+      const pulse = 0.5 + Math.sin(this.run.gameTime * 6) * 0.3;
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+      // Convert world coordinates to screen coordinates
+      const leftX = rect.minX - cam.offsetX;
+      const rightX = rect.maxX - cam.offsetX;
+      const topY = rect.minY - cam.offsetY;
+      const bottomY = rect.maxY - cam.offsetY;
+
+      ctx.globalAlpha = pulse;
+      ctx.strokeStyle = '#ff0000';
+      ctx.lineWidth = 4;
+
+      // Draw boundary rectangle
+      ctx.beginPath();
+      ctx.moveTo(leftX * renderer._sx, topY * renderer._sy);
+      ctx.lineTo(rightX * renderer._sx, topY * renderer._sy);
+      ctx.lineTo(rightX * renderer._sx, bottomY * renderer._sy);
+      ctx.lineTo(leftX * renderer._sx, bottomY * renderer._sy);
+      ctx.lineTo(leftX * renderer._sx, topY * renderer._sy);
+      ctx.stroke();
+
+      // Boundary text
+      ctx.globalAlpha = 0.8;
+      ctx.fillStyle = '#ff0000';
+      ctx.font = `${12 * renderer.dpr}px Arial`;
+      ctx.textAlign = 'center';
+      ctx.fillText('BOSS ARENA', (leftX + rightX) / 2 * renderer._sx, topY * renderer._sy - 10 * renderer.dpr);
+
+      ctx.restore();
+    }
+
+    // Level-up flash overlay
     if (this._levelUpFlash > 0) {
       renderer.setAlpha(this._levelUpFlash * 0.6);
       renderer.drawRect(0, 0, LW, LH, '#ffcc00');
       renderer.setAlpha(1);
     }
 
-    // Minimap renders to buffer
+    this._renderHUD();
     this._renderMinimap();
+    this._renderJoystick();
 
     renderer.restoreTransform();
     renderer.present();
-
-    // HUD text drawn at native screen resolution for crisp text
-    this._renderHUD();
   }
 
   _renderHUD() {
@@ -929,130 +1260,122 @@ export class GameScene {
     if (!player) return;
     const ph = player.components.Health;
 
-    renderer.beginOverlay();
-
-    // Boss warning text
-    if (this.bossWarningTimer > 0) {
-      const flash = Math.floor(this.bossWarningTimer * 6) % 2 === 0;
-      if (flash) {
-        renderer.drawTextO('WARNING', LW / 2, LH * 0.4, {
-          color: '#ff4444', size: 26, align: 'center', bold: true,
-        });
-        renderer.drawTextO('BOSS APPROACHING', LW / 2, LH * 0.4 + 32, {
-          color: '#ff8888', size: 12, align: 'center',
-        });
-      }
-    }
-
     // HP bar
     const hpX = 10, hpY = 10, hpW = 80, hpH = 8;
-    renderer.drawRectO(hpX - 1, hpY - 1, hpW + 2, hpH + 2, '#222');
-    renderer.drawRectO(hpX, hpY, hpW, hpH, '#333');
+    renderer.drawRect(hpX - 1, hpY - 1, hpW + 2, hpH + 2, '#222');
+    renderer.drawRect(hpX, hpY, hpW, hpH, '#333');
     const hpRatio = Math.max(0, ph.hp / ph.maxHp);
     const hpColor = hpRatio > 0.5 ? '#4ecdc4' : hpRatio > 0.25 ? '#ffa500' : '#ff4444';
-    renderer.drawRectO(hpX, hpY, hpW * hpRatio, hpH, hpColor);
-    renderer.drawTextO(`HP ${ph.hp}/${ph.maxHp}`, hpX + 2, hpY + 1, { color: '#fff', size: 8 });
+    renderer.drawRect(hpX, hpY, hpW * hpRatio, hpH, hpColor);
+    renderer.drawText(`HP ${ph.hp}/${ph.maxHp}`, hpX + 2, hpY + 1, { color: '#fff', size: 7 });
 
-    // Timer
-    let timeStr, timeColor;
-    if (run.isEndless()) {
-      const m = Math.floor(run.gameTime / 60);
-      const s = Math.floor(run.gameTime % 60);
-      timeStr = `${m}:${s.toString().padStart(2, '0')}`;
-      timeColor = '#ff6b35';
-    } else {
-      const mins = Math.floor(run.timeRemaining / 60);
-      const secs = Math.floor(run.timeRemaining % 60);
-      timeStr = `${mins}:${secs.toString().padStart(2, '0')}`;
-      timeColor = run.timeRemaining <= 30 ? (Math.floor(run.gameTime * 4) % 2 === 0 ? '#ff4444' : '#ff8888') : '#fff';
-    }
-    renderer.drawTextO(timeStr, LW / 2, 10, { color: timeColor, size: 18, align: 'center', bold: true });
-    if (run.isEndless()) {
-      renderer.drawTextO('ENDLESS', LW / 2, 30, { color: '#ff6b35', size: 9, align: 'center' });
-    }
+    // Timer, Supply warnings, Wave HUD - hide during boss fights
+    const bossActive = this.boss && this.boss.active;
+    const miniBossesActive = this.supplySystem && this.supplySystem.miniBosses && this.supplySystem.miniBosses.length > 0;
+    const inBossFight = bossActive || miniBossesActive;
 
-    // Supply warnings (top center, below timer)
-    if (this.supplySystem) {
-      const warnings = this.supplySystem.getActiveWarnings();
-      let warnY = 44;
-      for (const w of warnings) {
-        renderer.drawTextO(`${w.label}: ${w.time}s`, LW / 2, warnY, { color: w.color, size: 10, align: 'center' });
-        warnY += 14;
-      }
-    }
-
-    // Wave HUD
-    const waveNum = this.enemySpawn.getWaveNum();
-    const waveWarning = this.enemySpawn.getWaveWarning();
-    const waveTimer = this.enemySpawn.getWaveTimer();
-    renderer.drawTextO(`Wave ${waveNum}`, LW / 2, 58, { color: '#aaa', size: 10, align: 'center' });
-    if (waveWarning > 0) {
-      const isDanger = waveNum > 0 && (waveNum + 1) % 5 === 0;
-      const flashAlpha = Math.floor(run.gameTime * 6) % 2 === 0 ? 1 : 0.4;
-      renderer.setAlphaO(flashAlpha);
-      if (isDanger) {
-        renderer.drawTextO('!! DANGER WAVE !!', LW / 2, 72, { color: '#ffcc00', size: 12, align: 'center', bold: true });
+    if (!inBossFight) {
+      // Timer
+      let timeStr, timeColor;
+      if (run.isEndless()) {
+        const m = Math.floor(run.gameTime / 60);
+        const s = Math.floor(run.gameTime % 60);
+        timeStr = `${m}:${s.toString().padStart(2, '0')}`;
+        timeColor = '#ff6b35';
       } else {
-        renderer.drawTextO('WAVE INCOMING', LW / 2, 72, { color: '#ff6b35', size: 11, align: 'center', bold: true });
+        const mins = Math.floor(run.timeRemaining / 60);
+        const secs = Math.floor(run.timeRemaining % 60);
+        timeStr = `${mins}:${secs.toString().padStart(2, '0')}`;
+        timeColor = run.timeRemaining <= 30 ? (Math.floor(run.gameTime * 4) % 2 === 0 ? '#ff4444' : '#ff8888') : '#fff';
       }
-      renderer.setAlphaO(1);
-    } else if (waveNum > 0 && waveTimer > 0 && waveTimer < 30) {
-      renderer.drawTextO(`Next: ${Math.ceil(waveTimer)}s`, LW / 2, 70, { color: '#666', size: 9, align: 'center' });
+      renderer.drawText(timeStr, LW / 2, 10, { color: timeColor, size: 16, align: 'center', bold: true });
+      if (run.isEndless()) {
+        renderer.drawText('ENDLESS', LW / 2, 28, { color: '#ff6b35', size: 7, align: 'center' });
+      }
+
+      // Supply warnings (top center, below timer)
+      if (this.supplySystem) {
+        const warnings = this.supplySystem.getActiveWarnings();
+        let warnY = 40;
+        for (const w of warnings) {
+          renderer.drawText(`${w.label}: ${w.time}s`, LW / 2, warnY, { color: w.color, size: 8, align: 'center' });
+          warnY += 12;
+        }
+      }
+
+      // Wave HUD
+      const waveNum = this.enemySpawn.getWaveNum();
+      const waveWarning = this.enemySpawn.getWaveWarning();
+      const waveTimer = this.enemySpawn.getWaveTimer();
+      renderer.drawText(`Wave ${waveNum}`, LW / 2, 54, { color: '#aaa', size: 8, align: 'center' });
+      if (waveWarning > 0) {
+        const isDanger = waveNum > 0 && (waveNum + 1) % 5 === 0;
+        const flashAlpha = Math.floor(run.gameTime * 6) % 2 === 0 ? 1 : 0.4;
+        renderer.setAlpha(flashAlpha);
+        if (isDanger) {
+          renderer.drawText('!! DANGER WAVE !!', LW / 2, 66, { color: '#ffcc00', size: 10, align: 'center', bold: true });
+        } else {
+          renderer.drawText('WAVE INCOMING', LW / 2, 66, { color: '#ff6b35', size: 9, align: 'center', bold: true });
+        }
+        renderer.setAlpha(1);
+      } else if (waveNum > 0 && waveTimer > 0 && waveTimer < 30) {
+        renderer.drawText(`Next: ${Math.ceil(waveTimer)}s`, LW / 2, 64, { color: '#666', size: 7, align: 'center' });
+      }
     }
 
     // Level
-    renderer.drawTextO(`LV.${expSystem.level}`, 10, 22, { color: '#4ecdc4', size: 11 });
+    renderer.drawText(`LV.${expSystem.level}`, 10, 22, { color: '#4ecdc4', size: 10 });
 
     // EXP bar
     const expY = 35, expW = 80, expH = 4;
-    renderer.drawRectO(10, expY, expW, expH, '#333');
-    renderer.drawRectO(10, expY, expW * expSystem.getProgress(), expH, '#4ecdc4');
+    renderer.drawRect(10, expY, expW, expH, '#333');
+    renderer.drawRect(10, expY, expW * expSystem.getProgress(), expH, '#4ecdc4');
 
     // Kills + Score
-    renderer.drawTextO(`Kills: ${run.kills}`, 10, 44, { color: '#ff6b35', size: 9 });
-    renderer.drawTextO(`Score: ${run.score}`, 10, 56, { color: '#888', size: 9 });
+    renderer.drawText(`Kills: ${run.kills}`, 10, 44, { color: '#ff6b35', size: 8 });
+    renderer.drawText(`Score: ${run.score}`, 10, 54, { color: '#888', size: 8 });
 
     // Active skills list (bottom-left)
     const acquired = skillMgr.acquired;
     if (acquired.length > 0) {
-      const startY = LH - 16;
+      const startY = LH - 14;
       const showCount = Math.min(acquired.length, 4);
       const recent = acquired.slice(-showCount).reverse();
       for (let i = 0; i < recent.length; i++) {
         const s = recent[i];
-        const y = startY - i * 14;
-        renderer.setAlphaO(0.8);
-        renderer.drawRectO(4, y - 1, 3, 3, '#4ecdc4');
-        renderer.setAlphaO(1);
-        renderer.drawTextO(s.icon + s.name, 10, y - 2, { color: '#666', size: 9 });
+        const y = startY - i * 12;
+        renderer.setAlpha(0.8);
+        renderer.drawRect(4, y - 1, 3, 3, '#4ecdc4');
+        renderer.setAlpha(1);
+        renderer.drawText(s.icon + s.name, 10, y - 2, { color: '#666', size: 7 });
       }
     }
 
     // Buff indicators
     const buffs = this._currentBuffs;
-    let buffY = 66;
+    let buffY = 64;
     if (buffs.freezeAura > 0) {
-      renderer.drawTextO('FREEZE', 10, buffY, { color: '#00bcd4', size: 9 });
-      buffY += 12;
+      renderer.drawText('FREEZE', 10, buffY, { color: '#00bcd4', size: 7 });
+      buffY += 10;
     }
     if (buffs.thorns > 0) {
-      renderer.drawTextO('THORNS', 10, buffY, { color: '#2ecc71', size: 9 });
-      buffY += 12;
+      renderer.drawText('THORNS', 10, buffY, { color: '#2ecc71', size: 7 });
+      buffY += 10;
     }
     if (buffs.burn > 0) {
-      renderer.drawTextO('BURN', 10, buffY, { color: '#ff6b35', size: 9 });
-      buffY += 12;
+      renderer.drawText('BURN', 10, buffY, { color: '#ff6b35', size: 7 });
+      buffY += 10;
     }
     if (buffs.shield > 0) {
-      renderer.drawTextO(`SHIELD x${buffs.shield}`, 10, buffY, { color: '#3498db', size: 9 });
-      buffY += 12;
+      renderer.drawText(`SHIELD x${buffs.shield}`, 10, buffY, { color: '#3498db', size: 7 });
+      buffY += 10;
     }
     if (buffs.pierce > 0) {
-      renderer.drawTextO(`PIERCE x${buffs.pierce}`, 10, buffY, { color: '#e74c3c', size: 9 });
-      buffY += 12;
+      renderer.drawText(`PIERCE x${buffs.pierce}`, 10, buffY, { color: '#e74c3c', size: 7 });
+      buffY += 10;
     }
     if (buffs.ricochet > 0) {
-      renderer.drawTextO(`RICO x${buffs.ricochet}`, 10, buffY, { color: '#f39c12', size: 9 });
+      renderer.drawText(`RICO x${buffs.ricochet}`, 10, buffY, { color: '#f39c12', size: 7 });
     }
 
     // Boss HP bar
@@ -1060,28 +1383,29 @@ export class GameScene {
       const bossHpRatio = Math.max(0, this.boss.hp / this.boss.maxHp);
       const bw = LW - 40;
       const bx = 20, by = LH - 30;
-      renderer.drawRectO(bx - 1, by - 1, bw + 2, 12, '#222');
-      renderer.drawRectO(bx, by, bw, 10, '#333');
+      renderer.drawRect(bx - 1, by - 1, bw + 2, 12, '#222');
+      renderer.drawRect(bx, by, bw, 10, '#333');
 
       let bColor = '#e74c3c';
       if (this.boss.phase === 2) bColor = '#c0392b';
       if (this.boss.phase === 3) bColor = '#ff0000';
-      renderer.drawRectO(bx, by, bw * bossHpRatio, 10, bColor);
+      renderer.drawRect(bx, by, bw * bossHpRatio, 10, bColor);
 
-      renderer.drawTextO('BOSS', bx + bw / 2, by + 1, {
-        color: '#fff', size: 9, align: 'center',
+      const bossName = this.boss.phase === 1 ? '深渊魔神 Phase 1' :
+                       this.boss.phase === 2 ? '深渊魔神 Phase 2' : '深渊魔神 Phase 3';
+      renderer.drawText(bossName, bx + bw / 2, by + 1, {
+        color: '#fff', size: 8, align: 'center',
       });
 
-      const phaseText = this.boss.phase === 1 ? '' : this.boss.phase === 2 ? ' ENRAGED' : ' FRENZY';
+      const phaseText = this.boss.phase === 1 ? '' :
+                        this.boss.phase === 2 ? ' 规则变化' : ' 最终疯狂';
       if (phaseText) {
         const flash = Math.floor(run.gameTime * 4) % 2 === 0;
-        renderer.drawTextO(phaseText, bx + bw + 5, by + 1, {
-          color: flash ? '#ff4444' : '#ff8888', size: 9, align: 'left',
+        renderer.drawText(phaseText, bx + bw + 5, by + 1, {
+          color: flash ? '#ff0000' : '#ff4444', size: 7, align: 'left',
         });
       }
     }
-
-    renderer.endOverlay();
   }
 
   _buildMinimap() {
@@ -1187,5 +1511,31 @@ export class GameScene {
       const by = mmY + (bt.y / ts) * scale;
       renderer.drawCircle(bx, by, 3, '#ff4444');
     }
+  }
+
+  _renderJoystick() {
+    const js = this.input.getJoystick();
+    if (!js) return;
+    const ctx = this.renderer.ctx;
+    const dpr = this.renderer.dpr;
+    const ox = js.origin.x * dpr, oy = js.origin.y * dpr;
+    const px = js.pos.x * dpr, py = js.pos.y * dpr;
+    const maxR = this.input.joystickMaxRange * dpr;
+
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.beginPath();
+    ctx.arc(ox, oy, maxR, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+    ctx.lineWidth = 1.5 * dpr;
+    ctx.stroke();
+    const thumbR = maxR * 0.4;
+    ctx.beginPath();
+    ctx.arc(px, py, thumbR, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.25)';
+    ctx.fill();
+    ctx.restore();
   }
 }

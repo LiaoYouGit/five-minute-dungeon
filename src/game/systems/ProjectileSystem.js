@@ -1,4 +1,5 @@
 import { MathUtils } from '../../engine/MathUtils.js';
+import { SpatialGrid } from '../../engine/SpatialGrid.js';
 
 export class ProjectileSystem {
   constructor(world, lw, lh, onHit) {
@@ -7,6 +8,7 @@ export class ProjectileSystem {
     this.lh = lh;
     this.onHit = onHit;
     this.tileMap = null;
+    this.spatialGrid = new SpatialGrid(64); // 64像素格子大小
   }
 
   setTileMap(tileMap) {
@@ -165,8 +167,23 @@ export class ProjectileSystem {
   }
 
   checkHits() {
-    const projectiles = this.world.query('Transform', 'ProjectileTag', 'Damage');
+    // 重建空间网格（每帧重建）
+    this.spatialGrid.clear();
+
+    // 插入所有敌人到空间网格
     const enemies = this.world.query('Transform', 'EnemyTag', 'Health');
+    for (const e of enemies) {
+      if (!e.active) continue;
+      if (e.components.PhaseShift) continue; // PhaseShift敌人不参与碰撞
+
+      const et = e.components.Transform;
+      const es = e.components.Sprite;
+      const radius = es ? es.w / 2 : 8;
+
+      this.spatialGrid.insert(e.id, et.x, et.y, radius);
+    }
+
+    const projectiles = this.world.query('Transform', 'ProjectileTag', 'Damage');
     const hits = [];
 
     for (const p of projectiles) {
@@ -174,14 +191,22 @@ export class ProjectileSystem {
 
       const tracker = p.components.HitTracker;
       const ps = p.components.Sprite;
+      const pt = p.components.Transform;
 
-      for (const e of enemies) {
-        if (!e.active) continue;
+      // 查询投射物附近的敌人（只检测附近格子）
+      const nearbyEnemyIds = this.spatialGrid.queryNearby(pt.x, pt.y, ps.w / 2 + 20);
+
+      for (const enemyId of nearbyEnemyIds) {
+        const e = enemies.find((enemy) => enemy.id === enemyId);
+        if (!e || !e.active) continue;
+
+        // PhaseShift: elite invulnerability
+        if (e.components.PhaseShift) continue;
 
         if (tracker && tracker.hitSet.has(e.id)) continue;
 
         const es = e.components.Sprite;
-        const dist = MathUtils.distance(p.components.Transform, e.components.Transform);
+        const dist = MathUtils.distance(pt, e.components.Transform);
         if (dist < (ps.w + es.w) / 2) {
           hits.push({ projectile: p, enemy: e });
 
@@ -195,16 +220,20 @@ export class ProjectileSystem {
               tracker.ricochetLeft--;
               let nearest = null;
               let nearDist = 200;
-              for (const ne of enemies) {
-                if (ne.id === e.id || !ne.active || tracker.hitSet.has(ne.id)) continue;
-                const d = MathUtils.distance(p.components.Transform, ne.components.Transform);
+
+              // 再次查询附近敌人用于弹射
+              const ricochetIds = this.spatialGrid.queryNearby(pt.x, pt.y, nearDist);
+              for (const ricochetId of ricochetIds) {
+                const ne = enemies.find((enemy) => enemy.id === ricochetId);
+                if (ne.id === e.id || !ne.active || tracker.hitSet.has(ne.id) || ne.components.PhaseShift) continue;
+                const d = MathUtils.distance(pt, ne.components.Transform);
                 if (d < nearDist) {
                   nearDist = d;
                   nearest = ne;
                 }
               }
               if (nearest) {
-                const angle = MathUtils.angleBetween(p.components.Transform, nearest.components.Transform);
+                const angle = MathUtils.angleBetween(pt, nearest.components.Transform);
                 const speed = Math.sqrt(p.components.Velocity.x ** 2 + p.components.Velocity.y ** 2);
                 p.components.Velocity.x = Math.cos(angle) * speed;
                 p.components.Velocity.y = Math.sin(angle) * speed;

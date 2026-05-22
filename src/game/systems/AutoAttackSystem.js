@@ -47,10 +47,11 @@ export class AutoAttackSystem {
         }
         const a = angle + spread;
 
+        const projImageKey = burn > 0 ? 'bullet_fire' : 'bullet';
         const p = this.world.createEntity();
         this.world.addComponent(p, 'Transform', { x: pt.x, y: pt.y });
         this.world.addComponent(p, 'Velocity', { x: Math.cos(a) * speed, y: Math.sin(a) * speed });
-        this.world.addComponent(p, 'Sprite', { w: projSize, h: projSize, color: projColor });
+        this.world.addComponent(p, 'Sprite', { w: projSize, h: projSize, color: projColor, imageKey: projImageKey });
         this.world.addComponent(p, 'ProjectileTag', {});
         this.world.addComponent(p, 'Damage', { value: damage });
         this.world.addComponent(p, 'Lifetime', { remaining: 2.0 });

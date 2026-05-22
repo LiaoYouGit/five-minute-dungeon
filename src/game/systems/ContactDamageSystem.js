@@ -26,6 +26,10 @@ export class ContactDamageSystem {
 
       for (const e of enemies) {
         if (!e.active) continue;
+
+        // PhaseShift: elite invulnerability
+        if (e.components.PhaseShift) continue;
+
         const es = e.components.Sprite;
         const dist = MathUtils.distance(pt, e.components.Transform);
         if (dist < pr + es.w / 2) {

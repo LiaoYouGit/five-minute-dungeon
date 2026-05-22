@@ -5,7 +5,7 @@ const TYPE_META = {
   heal:     { color: '#2ecc71', idleColor: '#1a4a3a', label: '治疗援助',   icon: '🩹', warningDuration: 30, activeDuration: 25, cycleDuration: 90 },
   bomb:     { color: '#e74c3c', idleColor: '#4a1a1a', label: '武力援助',   icon: '💥', warningDuration: 30, activeDuration: 6,  cycleDuration: 100 },
   mission:  { color: '#f1c40f', idleColor: '#4a4020', label: '任务援助',   icon: '🎯', warningDuration: 30, activeDuration: 20, cycleDuration: 120 },
-  miniboss: { color: '#9b59b6', idleColor: '#3a1a4a', label: '小Boss援助', icon: '👑', warningDuration: 30, activeDuration: 60, cycleDuration: 180 },
+  miniboss: { color: '#9b59b6', idleColor: '#3a1a4a', label: '小Boss援助', icon: '👑', warningDuration: 30, activeDuration: 60, cycleDuration: 300 }, // longer cycle, mini boss spawns at 4min via separate trigger
 };
 
 export class SupplySystem {
@@ -13,6 +13,7 @@ export class SupplySystem {
     this.world = world;
     this.deps = deps;  // { expSystem, particles, camera, audio, dmgNumbers, enemySpawnSystem, LW, LH }
     this.miniBosses = [];
+    this.miniBossSpawned = false; // Track if 4-minute mini boss spawned
     this.points = supplyPoints.map((sp, idx) => ({
       ...sp,
       meta: TYPE_META[sp.type],
@@ -35,10 +36,50 @@ export class SupplySystem {
       .map(p => ({ label: p.meta.label, time: Math.ceil(p.timer), color: p.meta.color }));
   }
 
+  // Spawn mini boss at specific position (called when gameTime >= 240)
+  spawnMiniBossAt(x, y) {
+    const hp = 400 + Math.floor((this.deps.gameTime || 240) / 60) * 100; // Adjusted for player 100HP baseline
+    const mb = new MiniBossController(this.world, this.deps.LW, this.deps.LH);
+    mb.spawn(x, y, hp, (dx, dy) => {
+      // 大量经验奖励（150 EXP）
+      if (this.deps.expSystem) {
+        // 15个gem散落在Boss周围
+        for (let i = 0; i < 15; i++) {
+          const ang = (Math.PI * 2 / 15) * i + Math.random() * 0.3;
+          const radius = 25 + Math.random() * 30;
+          this.deps.expSystem.spawnGem(
+            dx + Math.cos(ang) * radius,
+            dy + Math.sin(ang) * radius,
+            10, // value per gem
+            1
+          );
+        }
+      }
+      if (this.deps.particles) {
+        this.deps.particles.emit(dx, dy, 60, { colors: ['#9b59b6', '#fff', '#ffcc00', '#ff6b35'], speed: 220, life: 1.3 });
+      }
+      if (this.deps.audio) this.deps.audio.play('kill');
+      if (this.deps.dmgNumbers) this.deps.dmgNumbers.add(dx, dy - 20, '+150 EXP', { color: '#ffd700', size: 18 });
+    });
+    this.miniBosses.push(mb);
+    this.miniBossSpawned = true;
+    if (this.deps.camera) this.deps.camera.shake(6, 0.5);
+    if (this.deps.audio) this.deps.audio.play('levelup');
+  }
+
   update(dt, player) {
     if (!player || !player.active) return;
     const pt = player.components.Transform;
     const ph = player.components.Health;
+
+    // Check for 4-minute mini boss spawn
+    const gameTime = this.deps.gameTime || 0;
+    if (gameTime >= 240 && !this.miniBossSpawned && this.deps.LW && this.deps.LH) {
+      // Spawn mini boss near player
+      const spawnX = MathUtils.clamp(pt.x + (Math.random() - 0.5) * 100, 50, this.deps.LW - 50);
+      const spawnY = MathUtils.clamp(pt.y + (Math.random() - 0.5) * 100, 50, this.deps.LH - 50);
+      this.spawnMiniBossAt(spawnX, spawnY);
+    }
 
     // update mini bosses
     for (let i = this.miniBosses.length - 1; i >= 0; i--) {
@@ -83,22 +124,32 @@ export class SupplySystem {
     p.progress = 0;
     p.missionSpawnTimer = 0;
     p.bombTimer = p.type === 'bomb' ? 4.0 : 0;
+    p.leaveTimer = 0; // Timer for mission failure (离开区域计时)
+    p.missionFailed = false; // Mission failure flag
     if (this.deps.camera) this.deps.camera.shake(3, 0.3);
 
     if (p.type === 'miniboss') {
-      const hp = 15 + Math.floor((this.deps.gameTime || 0) / 30) * 4;
+      const hp = 150 + Math.floor((this.deps.gameTime || 0) / 30) * 40; // Adjusted for player 100HP baseline
       const mb = new MiniBossController(this.world, this.deps.LW, this.deps.LH);
       mb.spawn(p.x, p.y, hp, (dx, dy) => {
+        // 大量经验奖励（96 EXP）
         if (this.deps.expSystem) {
-          for (let i = 0; i < 4; i++) {
-            const ang = (Math.PI * 2 / 4) * i;
-            this.deps.expSystem.spawnGem(dx + Math.cos(ang) * 18, dy + Math.sin(ang) * 18, 8, 1);
+          // 12个gem散落在援助点周围
+          for (let i = 0; i < 12; i++) {
+            const ang = (Math.PI * 2 / 12) * i + Math.random() * 0.3;
+            const radius = 20 + Math.random() * 25;
+            this.deps.expSystem.spawnGem(
+              dx + Math.cos(ang) * radius,
+              dy + Math.sin(ang) * radius,
+              8, // value per gem
+              1
+            );
           }
         }
         if (this.deps.particles) {
-          this.deps.particles.emit(dx, dy, 30, { colors: ['#9b59b6', '#fff', '#ffcc00'], speed: 150, life: 1.0 });
+          this.deps.particles.emit(dx, dy, 45, { colors: ['#9b59b6', '#fff', '#ffcc00'], speed: 180, life: 1.2 });
         }
-        if (this.deps.dmgNumbers) this.deps.dmgNumbers.add(dx, dy - 15, '+EXP', { color: '#9b59b6', size: 12 });
+        if (this.deps.dmgNumbers) this.deps.dmgNumbers.add(dx, dy - 15, '+96 EXP', { color: '#9b59b6', size: 16 });
         p.timer = 0; // end the supply event
       });
       this.miniBosses.push(mb);
@@ -128,25 +179,60 @@ export class SupplySystem {
       }
     } else if (p.type === 'mission') {
       if (dist < 40) {
-        p.progress += dt;
-        if (p.progress >= 15) {
-          // success!
-          if (this.deps.expSystem) {
-            for (let i = 0; i < 5; i++) {
-              const ang = (Math.PI * 2 / 5) * i;
-              this.deps.expSystem.spawnGem(p.x + Math.cos(ang) * 20, p.y + Math.sin(ang) * 20, 6, 1);
+        // Player in mission area
+        p.leaveTimer = 0; // Reset leave timer when back in area
+        p.missionFailed = false;
+
+        if (!p.missionFailed) {
+          p.progress += dt;
+          if (p.progress >= 15) {
+            // Success! - 大量经验奖励（100 EXP）
+            if (this.deps.expSystem) {
+              // 20个gem散落在区域周围
+              for (let i = 0; i < 20; i++) {
+                const ang = (Math.PI * 2 / 20) * i + Math.random() * 0.2;
+                const radius = 30 + Math.random() * 20;
+                this.deps.expSystem.spawnGem(
+                  p.x + Math.cos(ang) * radius,
+                  p.y + Math.sin(ang) * radius,
+                  5, // value per gem
+                  1
+                );
+              }
             }
+            if (this.deps.particles) this.deps.particles.emit(p.x, p.y, 40, { colors: ['#f1c40f', '#fff', '#ffcc00'], speed: 150, life: 1.0 });
+            if (this.deps.dmgNumbers) this.deps.dmgNumbers.add(p.x, p.y - 15, '+100 EXP', { color: '#f1c40f', size: 16 });
+            p.timer = 0;
           }
-          if (this.deps.particles) this.deps.particles.emit(p.x, p.y, 25, { colors: ['#f1c40f', '#fff'], speed: 130, life: 0.9 });
-          if (this.deps.dmgNumbers) this.deps.dmgNumbers.add(p.x, p.y - 15, '+30 EXP', { color: '#f1c40f', size: 12 });
-          p.timer = 0;
+        }
+      } else {
+        // Player left mission area
+        p.leaveTimer += dt;
+
+        if (p.leaveTimer >= 5.0 && !p.missionFailed) {
+          // Mission failed - player left area for >5s
+          p.missionFailed = true;
+          p.progress = 0;
+          p.leaveTimer = 0;
+
+          // Visual feedback for failure
+          if (this.deps.camera) this.deps.camera.shake(4, 0.4);
+          if (this.deps.particles) {
+            this.deps.particles.emit(p.x, p.y, 15, { colors: ['#e74c3c', '#ff0000'], speed: 80, life: 0.7 });
+          }
+          if (this.deps.dmgNumbers) {
+            this.deps.dmgNumbers.add(p.x, p.y - 15, '任务失败', { color: '#e74c3c', size: 14 });
+          }
         }
       }
-      // spawn extra enemies near mission point
-      p.missionSpawnTimer -= dt;
-      if (p.missionSpawnTimer <= 0 && this.deps.enemySpawnSystem) {
-        p.missionSpawnTimer = 2.5;
-        this.deps.enemySpawnSystem.spawnAt?.(p.x + MathUtils.randomRange(-60, 60), p.y + MathUtils.randomRange(-60, 60), this.deps.gameTime || 0);
+
+      // spawn extra enemies near mission point (only if not failed)
+      if (!p.missionFailed) {
+        p.missionSpawnTimer -= dt;
+        if (p.missionSpawnTimer <= 0 && this.deps.enemySpawnSystem) {
+          p.missionSpawnTimer = 2.5;
+          this.deps.enemySpawnSystem.spawnAt?.(p.x + MathUtils.randomRange(-60, 60), p.y + MathUtils.randomRange(-60, 60), this.deps.gameTime || 0);
+        }
       }
     }
     // miniboss handled via onDeath callback
@@ -162,8 +248,8 @@ export class SupplySystem {
       if (!e.active) continue;
       const et = e.components.Transform;
       if (MathUtils.distance(et, p) < 80) {
-        e.components.Health.hp -= 25;
-        if (this.deps.dmgNumbers) this.deps.dmgNumbers.add(et.x, et.y, 25, { color: '#ff6b35', size: 10 });
+        e.components.Health.hp -= 100; // Adjusted for player 100HP baseline (high damage AOE)
+        if (this.deps.dmgNumbers) this.deps.dmgNumbers.add(et.x, et.y, 100, { color: '#ff6b35', size: 10 });
         if (e.components.Health.hp <= 0) {
           if (this.deps.expSystem) this.deps.expSystem.spawnGem(et.x, et.y, 1, 1);
           this.world.removeEntity(e.id);
@@ -191,13 +277,35 @@ export class SupplySystem {
       }
       // mission area circle
       if (p.type === 'mission' && isActive) {
-        renderer.setAlpha(0.2);
-        renderer.drawCircle(sx, sy, 40, '#f1c40f');
+        // Area circle - red if player is leaving, yellow if in area
+        const circleColor = p.leaveTimer > 0 ? '#e74c3c' : '#f1c40f';
+        const circleAlpha = p.leaveTimer > 0 ? 0.4 : 0.2;
+        renderer.setAlpha(circleAlpha);
+        renderer.drawCircle(sx, sy, 40, circleColor);
         renderer.setAlpha(1);
-        // progress bar
+
+        // Progress bar (yellow)
         const bw = 40, bh = 4;
         renderer.drawRect(sx - bw / 2, sy - 28, bw, bh, '#222');
-        renderer.drawRect(sx - bw / 2, sy - 28, bw * (p.progress / 15), bh, '#f1c40f');
+        if (!p.missionFailed) {
+          renderer.drawRect(sx - bw / 2, sy - 28, bw * (p.progress / 15), bh, '#f1c40f');
+        }
+
+        // Leave timer warning (red countdown bar) - only show when player is outside
+        if (p.leaveTimer > 0 && p.leaveTimer < 5.0) {
+          const leaveBw = 40, leaveBh = 4;
+          renderer.drawRect(sx - leaveBw / 2, sy - 20, leaveBw, leaveBh, '#222');
+          renderer.drawRect(sx - leaveBw / 2, sy - 20, leaveBw * (p.leaveTimer / 5.0), leaveBh, '#e74c3c');
+
+          // Warning text above progress bar
+          const timeLeft = Math.ceil(5.0 - p.leaveTimer);
+          renderer.drawText(`离开区域 ${timeLeft}s`, sx - 30, sy - 35, { color: '#e74c3c', size: 8 });
+        }
+
+        // Mission failed text
+        if (p.missionFailed) {
+          renderer.drawText('任务失败', sx - 20, sy - 35, { color: '#e74c3c', size: 10 });
+        }
       }
 
       // pad base
@@ -218,6 +326,11 @@ export class SupplySystem {
         renderer.drawCircle(sx, sy, 18, color);
         renderer.setAlpha(1);
       }
+    }
+
+    // Render mini bosses (charge warnings, fire patches, etc.)
+    for (const mb of this.miniBosses) {
+      mb.render(renderer, camera);
     }
   }
 }

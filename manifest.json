@@ -1,7 +1,7 @@
 {
-  "name": "五分钟地牢",
-  "short_name": "地牢冲刺",
-  "description": "5分钟一场微型冒险！自动攻击+手动走位，Roguelike技能升级",
+  "name": "地牢危机",
+  "short_name": "地牢危机",
+  "description": "8分钟一场微型冒险！自动攻击+手动走位，Roguelike技能升级",
   "start_url": "/",
   "display": "standalone",
   "orientation": "portrait",

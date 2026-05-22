@@ -3,8 +3,10 @@ import { InputManager } from './engine/InputManager.js';
 import { GameLoop } from './engine/GameLoop.js';
 import { AudioManager } from './engine/AudioManager.js';
 import { ParticleSystem } from './engine/ParticleSystem.js';
+import { AssetLoader } from './engine/AssetLoader.js';
 import { SceneManager } from './game/scenes/SceneManager.js';
 import { MenuScene } from './game/scenes/MenuScene.js';
+import { CharacterSelectionScene } from './game/scenes/CharacterSelectionScene.js';
 import { GameScene } from './game/scenes/GameScene.js';
 import { LevelUpScene } from './game/scenes/LevelUpScene.js';
 import { ResultScene } from './game/scenes/ResultScene.js';
@@ -14,21 +16,36 @@ const renderer = new Renderer(canvas);
 const input = new InputManager();
 const audio = new AudioManager();
 const particles = new ParticleSystem();
+const assets = new AssetLoader();
 const scenes = new SceneManager();
 
 input.bind(canvas);
 
 // --- Menu ---
-let _loading = null;
+let _selectedMode = null;
 
 const menuScene = new MenuScene(renderer, audio, (mode) => {
   audio.init();
-  _loading = { mode, progress: 0, phase: 0, timer: 0 };
+  _selectedMode = mode;
+  scenes.push('characterSelection', { mode });
 });
 scenes.register('menu', menuScene);
 
+// --- Character Selection ---
+const characterSelectionScene = new CharacterSelectionScene(renderer, audio, (characterId) => {
+  if (characterId) {
+    // 确认角色，开始加载游戏
+    audio.init();
+    _loading = { mode: _selectedMode, characterId, progress: 0, phase: 0, timer: 0 };
+  } else {
+    // 返回菜单
+    scenes.pop();
+  }
+});
+scenes.register('characterSelection', characterSelectionScene);
+
 // --- Game ---
-const gameScene = new GameScene(renderer, input, audio, particles,
+const gameScene = new GameScene(renderer, input, audio, particles, assets,
   (level, choices, onSelect) => {
     scenes.push('levelup', { level, choices, onSelect, skillMgr: gameScene.skillMgr, onPop: () => scenes.pop() });
   },
@@ -63,6 +80,7 @@ function getLogicalPos(clientX, clientY) {
 function handleSceneTap(lx, ly) {
   const name = scenes.getCurrentName();
   if (name === 'menu') return menuScene.handleTap(lx, ly);
+  if (name === 'characterSelection') return characterSelectionScene.handleTap(lx, ly);
   if (name === 'levelup') return levelUpScene.handleTap(lx, ly);
   if (name === 'result') return resultScene.handleTap(lx, ly);
   return false;
@@ -153,7 +171,7 @@ const gameLoop = new GameLoop({
       }
       if (_loading.phase === 1 && _loading.timer > 0.5) {
         input.setEnabled(true);
-        scenes.push('game', { mode: _loading.mode });
+        scenes.push('game', { mode: _loading.mode, characterId: _loading.characterId });
         _loading.phase = 2;
         _loading.progress = 0.7;
       }
@@ -176,14 +194,14 @@ const gameLoop = new GameLoop({
       return;
     }
     scenes.render(alpha);
-    // FPS counter drawn as overlay after scene's present()
     if (scenes.getCurrentName() === 'game') {
-      renderer.beginOverlay();
-      renderer.drawTextO(`${Math.round(gameLoop.fps)}fps`, 10, renderer.logicalHeight - 18, {
-        color: '#555', size: 9,
+      renderer.applyTransform();
+      renderer.drawText(`${Math.round(gameLoop.fps)}fps`, 10, renderer.logicalHeight - 16, {
+        color: '#555', size: 8,
       });
-      renderer.endOverlay();
+      renderer.restoreTransform();
     }
+    renderer.present();
   },
 });
 
@@ -228,3 +246,8 @@ function renderLoading() {
 }
 
 gameLoop.start();
+
+// Load assets in background, then enable menu
+assets.loadAll().then(() => {
+  console.log(`Assets loaded: ${Object.keys(assets.images).length}`);
+});

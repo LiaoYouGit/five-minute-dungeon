@@ -24,7 +24,7 @@ export class BossController {
   spawn(x, y, maxHp = 50) {
     this.entity = this.world.createEntity();
     this.world.addComponent(this.entity, 'Transform', { x, y: y - 100 });
-    this.world.addComponent(this.entity, 'Sprite', { w: 32, h: 32, color: '#e74c3c' });
+    this.world.addComponent(this.entity, 'Sprite', { w: 32, h: 32, color: '#e74c3c', imageKey: 'boss_phase1' });
     this.world.addComponent(this.entity, 'Health', { hp: maxHp, maxHp });
     this.world.addComponent(this.entity, 'EnemyTag', {});
     this.world.addComponent(this.entity, 'Damage', { value: 2 });
@@ -55,11 +55,13 @@ export class BossController {
       this.attackCooldown = 1.0;
       this.entity.components.Speed.value = 70;
       this.entity.components.Sprite.color = '#ff0000';
+      this.entity.components.Sprite.imageKey = 'boss_phase3';
     } else if (hpRatio <= PHASE_2_THRESHOLD && this.phase < 2) {
       this.phase = 2;
       this.attackCooldown = 1.5;
       this.entity.components.Speed.value = 55;
       this.entity.components.Sprite.color = '#c0392b';
+      this.entity.components.Sprite.imageKey = 'boss_phase2';
     }
 
     // Movement: move toward a random point near player
@@ -152,7 +154,7 @@ export class BossController {
     const p = this.world.createEntity();
     this.world.addComponent(p, 'Transform', { x, y });
     this.world.addComponent(p, 'Velocity', { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed });
-    this.world.addComponent(p, 'Sprite', { w: 6, h: 6, color: '#ff4444' });
+    this.world.addComponent(p, 'Sprite', { w: 6, h: 6, color: '#ff4444', imageKey: 'boss_bullet' });
     this.world.addComponent(p, 'ProjectileTag', {});
     this.world.addComponent(p, 'Damage', { value: 1 });
     this.world.addComponent(p, 'Lifetime', { remaining: 3.0 });

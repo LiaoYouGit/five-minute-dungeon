@@ -200,12 +200,12 @@ export function rollEnemyByArchetype(archetype, waveNum) {
 }
 
 /** Generate a wave composition: returns [{ enemyDef, count }] */
-export function rollWaveComposition(waveNum) {
+export function rollWaveComposition(waveNum, timeScale = 1) {
   const rules = WAVE_RULES;
   const isDanger = waveNum % rules.dangerWaveInterval === 0;
 
-  // Total enemy count for this wave
-  const totalCount = Math.floor(rules.baseCount + waveNum * rules.growth);
+  // Total enemy count for this wave (scaled by time)
+  const totalCount = Math.floor((rules.baseCount + waveNum * rules.growth) * timeScale);
 
   // Build weighted archetype pool for this wave
   const schedule = rules.archetypeSchedule;

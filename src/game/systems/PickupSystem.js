@@ -1,11 +1,11 @@
 import { MathUtils } from '../../engine/MathUtils.js';
 
 const PICKUP_TYPES = {
-  coin: { color: '#ffcc00', size: 6, score: 5 },
-  healthPotion: { color: '#e74c3c', size: 6, heal: 1 },
-  bigHealth: { color: '#ff5577', size: 8, heal: 3 },
-  magnet: { color: '#9b59b6', size: 7, magnetBoost: 1.5, duration: 10 },
-  expGem: { color: '#4ecdc4', size: 6, exp: 5 },
+  coin: { color: '#ffcc00', size: 6, score: 5, imageKey: 'coin' },
+  healthPotion: { color: '#e74c3c', size: 6, heal: 1, imageKey: 'health_potion' },
+  bigHealth: { color: '#ff5577', size: 8, heal: 3, imageKey: 'big_health_potion' },
+  magnet: { color: '#9b59b6', size: 7, magnetBoost: 1.5, duration: 10, imageKey: 'magnet' },
+  expGem: { color: '#4ecdc4', size: 6, exp: 5, imageKey: 'exp_gem_special' },
 };
 
 export class PickupSystem {
@@ -24,15 +24,12 @@ export class PickupSystem {
     const roll = Math.random();
     if (roll < 0.18) {
       this._create(x, y, 'coin');
-    } else if (roll < 0.26) {
-      this._create(x, y, 'healthPotion');
-    } else if (roll < 0.28) {
-      this._create(x, y, 'bigHealth');
-    } else if (roll < 0.31) {
+    } else if (roll < 0.21) {
       this._create(x, y, 'magnet');
-    } else if (roll < 0.36) {
+    } else if (roll < 0.26) {
       this._create(x, y, 'expGem');
     }
+    // Removed healthPotion and bigHealth drops
   }
 
   _create(x, y, type) {
@@ -43,7 +40,7 @@ export class PickupSystem {
       x: x + MathUtils.randomRange(-12, 12),
       y: y + MathUtils.randomRange(-12, 12),
     });
-    this.world.addComponent(p, 'Sprite', { w: def.size, h: def.size, color: def.color });
+    this.world.addComponent(p, 'Sprite', { w: def.size, h: def.size, color: def.color, imageKey: def.imageKey });
     this.world.addComponent(p, 'PickupTag', {});
     this.world.addComponent(p, 'PickupType', { type });
     this.world.addComponent(p, 'Magnet', { active: false, baseRange: 20 });

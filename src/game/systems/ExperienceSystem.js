@@ -27,7 +27,7 @@ export class ExperienceSystem {
     const finalValue = Math.max(1, Math.ceil(value * mult));
     const g = this.world.createEntity();
     this.world.addComponent(g, 'Transform', { x: x + MathUtils.randomRange(-8, 8), y: y + MathUtils.randomRange(-8, 8) });
-    this.world.addComponent(g, 'Sprite', { w: 5, h: 5, color: '#4ecdc4' });
+    this.world.addComponent(g, 'Sprite', { w: 5, h: 5, color: '#4ecdc4', imageKey: 'exp_gem' });
     this.world.addComponent(g, 'PickupTag', {});
     this.world.addComponent(g, 'ExperienceValue', { value: finalValue });
     this.world.addComponent(g, 'Magnet', { active: false });
