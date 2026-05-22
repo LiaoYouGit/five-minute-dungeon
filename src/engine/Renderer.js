@@ -72,6 +72,56 @@ export class Renderer {
     );
   }
 
+  // ── Native overlay drawing (crisp text/bars at screen resolution) ──
+
+  beginOverlay() {
+    const mctx = this._mainCtx;
+    mctx.save();
+    const s = this.scale * this.dpr;
+    mctx.setTransform(s, 0, 0, s, 0, 0);
+    mctx.imageSmoothingEnabled = true;
+  }
+
+  endOverlay() {
+    this._mainCtx.restore();
+  }
+
+  drawTextO(text, x, y, { color = '#ffffff', size = 12, align = 'left', font = 'monospace', bold = false } = {}) {
+    const mctx = this._mainCtx;
+    mctx.fillStyle = color;
+    mctx.font = `${bold ? 'bold ' : ''}${size}px ${font}`;
+    mctx.textAlign = align;
+    mctx.textBaseline = 'top';
+    mctx.fillText(text, x, y);
+  }
+
+  drawRectO(x, y, w, h, color) {
+    this._mainCtx.fillStyle = color;
+    this._mainCtx.fillRect(Math.floor(x), Math.floor(y), Math.ceil(w), Math.ceil(h));
+  }
+
+  setAlphaO(a) {
+    this._mainCtx.globalAlpha = a;
+  }
+
+  /** Draw a circle on the overlay (for aura rings etc.) */
+  drawCircleO(x, y, r, color) {
+    const mctx = this._mainCtx;
+    mctx.fillStyle = color;
+    mctx.beginPath();
+    mctx.arc(Math.floor(x), Math.floor(y), r, 0, Math.PI * 2);
+    mctx.fill();
+  }
+
+  strokeCircleO(x, y, r, color, lineWidth = 1) {
+    const mctx = this._mainCtx;
+    mctx.strokeStyle = color;
+    mctx.lineWidth = lineWidth;
+    mctx.beginPath();
+    mctx.arc(Math.floor(x), Math.floor(y), r, 0, Math.PI * 2);
+    mctx.stroke();
+  }
+
   drawRect(x, y, w, h, color) {
     this.ctx.fillStyle = color;
     this.ctx.fillRect(Math.floor(x), Math.floor(y), w, h);

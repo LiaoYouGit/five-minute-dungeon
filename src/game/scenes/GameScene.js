@@ -907,30 +907,21 @@ export class GameScene {
     this.dmgNumbers.render(renderer.ctx);
     renderer.ctx.restore();
 
-    // Boss warning text
-    if (this.bossWarningTimer > 0) {
-      const flash = Math.floor(this.bossWarningTimer * 6) % 2 === 0;
-      if (flash) {
-        renderer.drawText('WARNING', LW / 2, LH * 0.4, {
-          color: '#ff4444', size: 24, align: 'center',
-        });
-        renderer.drawText('BOSS APPROACHING', LW / 2, LH * 0.4 + 30, {
-          color: '#ff8888', size: 10, align: 'center',
-        });
-      }
-    }
-
-    this._renderHUD();
-
-    // Level-up flash overlay
+    // Level-up flash overlay (on buffer before present)
     if (this._levelUpFlash > 0) {
       renderer.setAlpha(this._levelUpFlash * 0.6);
       renderer.drawRect(0, 0, LW, LH, '#ffcc00');
       renderer.setAlpha(1);
     }
 
+    // Minimap renders to buffer
+    this._renderMinimap();
+
     renderer.restoreTransform();
     renderer.present();
+
+    // HUD text drawn at native screen resolution for crisp text
+    this._renderHUD();
   }
 
   _renderHUD() {
@@ -938,14 +929,29 @@ export class GameScene {
     if (!player) return;
     const ph = player.components.Health;
 
+    renderer.beginOverlay();
+
+    // Boss warning text
+    if (this.bossWarningTimer > 0) {
+      const flash = Math.floor(this.bossWarningTimer * 6) % 2 === 0;
+      if (flash) {
+        renderer.drawTextO('WARNING', LW / 2, LH * 0.4, {
+          color: '#ff4444', size: 26, align: 'center', bold: true,
+        });
+        renderer.drawTextO('BOSS APPROACHING', LW / 2, LH * 0.4 + 32, {
+          color: '#ff8888', size: 12, align: 'center',
+        });
+      }
+    }
+
     // HP bar
     const hpX = 10, hpY = 10, hpW = 80, hpH = 8;
-    renderer.drawRect(hpX - 1, hpY - 1, hpW + 2, hpH + 2, '#222');
-    renderer.drawRect(hpX, hpY, hpW, hpH, '#333');
+    renderer.drawRectO(hpX - 1, hpY - 1, hpW + 2, hpH + 2, '#222');
+    renderer.drawRectO(hpX, hpY, hpW, hpH, '#333');
     const hpRatio = Math.max(0, ph.hp / ph.maxHp);
     const hpColor = hpRatio > 0.5 ? '#4ecdc4' : hpRatio > 0.25 ? '#ffa500' : '#ff4444';
-    renderer.drawRect(hpX, hpY, hpW * hpRatio, hpH, hpColor);
-    renderer.drawText(`HP ${ph.hp}/${ph.maxHp}`, hpX + 2, hpY + 1, { color: '#fff', size: 7 });
+    renderer.drawRectO(hpX, hpY, hpW * hpRatio, hpH, hpColor);
+    renderer.drawTextO(`HP ${ph.hp}/${ph.maxHp}`, hpX + 2, hpY + 1, { color: '#fff', size: 8 });
 
     // Timer
     let timeStr, timeColor;
@@ -960,18 +966,18 @@ export class GameScene {
       timeStr = `${mins}:${secs.toString().padStart(2, '0')}`;
       timeColor = run.timeRemaining <= 30 ? (Math.floor(run.gameTime * 4) % 2 === 0 ? '#ff4444' : '#ff8888') : '#fff';
     }
-    renderer.drawText(timeStr, LW / 2, 10, { color: timeColor, size: 16, align: 'center' });
+    renderer.drawTextO(timeStr, LW / 2, 10, { color: timeColor, size: 18, align: 'center', bold: true });
     if (run.isEndless()) {
-      renderer.drawText('ENDLESS', LW / 2, 28, { color: '#ff6b35', size: 7, align: 'center' });
+      renderer.drawTextO('ENDLESS', LW / 2, 30, { color: '#ff6b35', size: 9, align: 'center' });
     }
 
     // Supply warnings (top center, below timer)
     if (this.supplySystem) {
       const warnings = this.supplySystem.getActiveWarnings();
-      let warnY = 40;
+      let warnY = 44;
       for (const w of warnings) {
-        renderer.drawText(`${w.label}: ${w.time}s`, LW / 2, warnY, { color: w.color, size: 8, align: 'center' });
-        warnY += 12;
+        renderer.drawTextO(`${w.label}: ${w.time}s`, LW / 2, warnY, { color: w.color, size: 10, align: 'center' });
+        warnY += 14;
       }
     }
 
@@ -979,75 +985,74 @@ export class GameScene {
     const waveNum = this.enemySpawn.getWaveNum();
     const waveWarning = this.enemySpawn.getWaveWarning();
     const waveTimer = this.enemySpawn.getWaveTimer();
-    renderer.drawText(`Wave ${waveNum}`, LW / 2, 54, { color: '#aaa', size: 8, align: 'center' });
+    renderer.drawTextO(`Wave ${waveNum}`, LW / 2, 58, { color: '#aaa', size: 10, align: 'center' });
     if (waveWarning > 0) {
       const isDanger = waveNum > 0 && (waveNum + 1) % 5 === 0;
       const flashAlpha = Math.floor(run.gameTime * 6) % 2 === 0 ? 1 : 0.4;
-      renderer.setAlpha(flashAlpha);
+      renderer.setAlphaO(flashAlpha);
       if (isDanger) {
-        renderer.drawText('!! DANGER WAVE !!', LW / 2, 66, { color: '#ffcc00', size: 10, align: 'center' });
+        renderer.drawTextO('!! DANGER WAVE !!', LW / 2, 72, { color: '#ffcc00', size: 12, align: 'center', bold: true });
       } else {
-        renderer.drawText('WAVE INCOMING', LW / 2, 66, { color: '#ff6b35', size: 9, align: 'center' });
+        renderer.drawTextO('WAVE INCOMING', LW / 2, 72, { color: '#ff6b35', size: 11, align: 'center', bold: true });
       }
-      renderer.setAlpha(1);
+      renderer.setAlphaO(1);
     } else if (waveNum > 0 && waveTimer > 0 && waveTimer < 30) {
-      renderer.drawText(`Next: ${Math.ceil(waveTimer)}s`, LW / 2, 64, { color: '#666', size: 7, align: 'center' });
+      renderer.drawTextO(`Next: ${Math.ceil(waveTimer)}s`, LW / 2, 70, { color: '#666', size: 9, align: 'center' });
     }
 
     // Level
-    renderer.drawText(`LV.${expSystem.level}`, 10, 22, { color: '#4ecdc4', size: 10 });
+    renderer.drawTextO(`LV.${expSystem.level}`, 10, 22, { color: '#4ecdc4', size: 11 });
 
     // EXP bar
     const expY = 35, expW = 80, expH = 4;
-    renderer.drawRect(10, expY, expW, expH, '#333');
-    renderer.drawRect(10, expY, expW * expSystem.getProgress(), expH, '#4ecdc4');
+    renderer.drawRectO(10, expY, expW, expH, '#333');
+    renderer.drawRectO(10, expY, expW * expSystem.getProgress(), expH, '#4ecdc4');
 
-    // Kills + Score (below EXP bar)
-    renderer.drawText(`Kills: ${run.kills}`, 10, 44, { color: '#ff6b35', size: 8 });
-    renderer.drawText(`Score: ${run.score}`, 10, 54, { color: '#888', size: 8 });
+    // Kills + Score
+    renderer.drawTextO(`Kills: ${run.kills}`, 10, 44, { color: '#ff6b35', size: 9 });
+    renderer.drawTextO(`Score: ${run.score}`, 10, 56, { color: '#888', size: 9 });
 
     // Active skills list (bottom-left)
     const acquired = skillMgr.acquired;
     if (acquired.length > 0) {
-      const startY = LH - 14;
+      const startY = LH - 16;
       const showCount = Math.min(acquired.length, 4);
-      // Show last acquired skills (most recent first)
       const recent = acquired.slice(-showCount).reverse();
       for (let i = 0; i < recent.length; i++) {
         const s = recent[i];
-        const y = startY - i * 12;
-        renderer.setAlpha(0.8);
-        renderer.drawRect(4, y - 1, 3, 3, '#4ecdc4');
-        renderer.setAlpha(1);
-        renderer.drawText(s.icon + s.name, 10, y - 2, { color: '#666', size: 7 });
+        const y = startY - i * 14;
+        renderer.setAlphaO(0.8);
+        renderer.drawRectO(4, y - 1, 3, 3, '#4ecdc4');
+        renderer.setAlphaO(1);
+        renderer.drawTextO(s.icon + s.name, 10, y - 2, { color: '#666', size: 9 });
       }
     }
 
-    // Buff indicators (below kills/score)
+    // Buff indicators
     const buffs = this._currentBuffs;
-    let buffY = 64;
+    let buffY = 66;
     if (buffs.freezeAura > 0) {
-      renderer.drawText('❄ FREEZE', 10, buffY, { color: '#00bcd4', size: 7 });
-      buffY += 10;
+      renderer.drawTextO('FREEZE', 10, buffY, { color: '#00bcd4', size: 9 });
+      buffY += 12;
     }
     if (buffs.thorns > 0) {
-      renderer.drawText('🌿 THORNS', 10, buffY, { color: '#2ecc71', size: 7 });
-      buffY += 10;
+      renderer.drawTextO('THORNS', 10, buffY, { color: '#2ecc71', size: 9 });
+      buffY += 12;
     }
     if (buffs.burn > 0) {
-      renderer.drawText('🔥 BURN', 10, buffY, { color: '#ff6b35', size: 7 });
-      buffY += 10;
+      renderer.drawTextO('BURN', 10, buffY, { color: '#ff6b35', size: 9 });
+      buffY += 12;
     }
     if (buffs.shield > 0) {
-      renderer.drawText(`◆ SHIELD x${buffs.shield}`, 10, buffY, { color: '#3498db', size: 7 });
-      buffY += 10;
+      renderer.drawTextO(`SHIELD x${buffs.shield}`, 10, buffY, { color: '#3498db', size: 9 });
+      buffY += 12;
     }
     if (buffs.pierce > 0) {
-      renderer.drawText(`➹ PIERCE x${buffs.pierce}`, 10, buffY, { color: '#e74c3c', size: 7 });
-      buffY += 10;
+      renderer.drawTextO(`PIERCE x${buffs.pierce}`, 10, buffY, { color: '#e74c3c', size: 9 });
+      buffY += 12;
     }
     if (buffs.ricochet > 0) {
-      renderer.drawText(`⟳ RICO x${buffs.ricochet}`, 10, buffY, { color: '#f39c12', size: 7 });
+      renderer.drawTextO(`RICO x${buffs.ricochet}`, 10, buffY, { color: '#f39c12', size: 9 });
     }
 
     // Boss HP bar
@@ -1055,28 +1060,28 @@ export class GameScene {
       const bossHpRatio = Math.max(0, this.boss.hp / this.boss.maxHp);
       const bw = LW - 40;
       const bx = 20, by = LH - 30;
-      renderer.drawRect(bx - 1, by - 1, bw + 2, 12, '#222');
-      renderer.drawRect(bx, by, bw, 10, '#333');
+      renderer.drawRectO(bx - 1, by - 1, bw + 2, 12, '#222');
+      renderer.drawRectO(bx, by, bw, 10, '#333');
 
       let bColor = '#e74c3c';
       if (this.boss.phase === 2) bColor = '#c0392b';
       if (this.boss.phase === 3) bColor = '#ff0000';
-      renderer.drawRect(bx, by, bw * bossHpRatio, 10, bColor);
+      renderer.drawRectO(bx, by, bw * bossHpRatio, 10, bColor);
 
-      renderer.drawText('BOSS', bx + bw / 2, by + 1, {
-        color: '#fff', size: 8, align: 'center',
+      renderer.drawTextO('BOSS', bx + bw / 2, by + 1, {
+        color: '#fff', size: 9, align: 'center',
       });
 
       const phaseText = this.boss.phase === 1 ? '' : this.boss.phase === 2 ? ' ENRAGED' : ' FRENZY';
       if (phaseText) {
         const flash = Math.floor(run.gameTime * 4) % 2 === 0;
-        renderer.drawText(phaseText, bx + bw + 5, by + 1, {
-          color: flash ? '#ff4444' : '#ff8888', size: 7, align: 'left',
+        renderer.drawTextO(phaseText, bx + bw + 5, by + 1, {
+          color: flash ? '#ff4444' : '#ff8888', size: 9, align: 'left',
         });
       }
     }
 
-    this._renderMinimap();
+    renderer.endOverlay();
   }
 
   _buildMinimap() {

@@ -87,23 +87,32 @@ export class LevelUpScene {
   render(alpha) {
     const { renderer, LW, LH } = this;
 
+    // Dark backdrop on buffer
     renderer.applyTransform();
-
-    // Dark backdrop
     renderer.setAlpha(this._bgAlpha());
     renderer.drawRect(0, 0, LW, LH, '#000');
     renderer.setAlpha(1);
+    renderer.restoreTransform();
+    renderer.present();
+
+    // All card text + title at native resolution
+    renderer.beginOverlay();
+
+    const bgAlpha = this._bgAlpha();
+    renderer.setAlphaO(bgAlpha);
+    renderer.drawRectO(0, 0, LW, LH, '#000');
+    renderer.setAlphaO(1);
 
     // Title (fade in)
     const titleAlpha = this._phase === 'in' ? Math.min(1, this._timer / 0.3) : (this._phase === 'out' ? Math.max(0, 1 - this._timer / 0.2) : 1);
-    renderer.setAlpha(titleAlpha);
-    renderer.drawText('LEVEL UP!', LW / 2, LH * 0.18, {
-      color: '#ffcc00', size: 20, align: 'center',
+    renderer.setAlphaO(titleAlpha);
+    renderer.drawTextO('LEVEL UP!', LW / 2, LH * 0.18, {
+      color: '#ffcc00', size: 22, align: 'center', bold: true,
     });
-    renderer.drawText(`Lv.${this.level}`, LW / 2, LH * 0.18 + 26, {
-      color: '#4ecdc4', size: 11, align: 'center',
+    renderer.drawTextO(`Lv.${this.level}`, LW / 2, LH * 0.18 + 28, {
+      color: '#4ecdc4', size: 13, align: 'center',
     });
-    renderer.setAlpha(1);
+    renderer.setAlphaO(1);
 
     // Skill cards
     for (const card of this._cards) {
@@ -119,39 +128,38 @@ export class LevelUpScene {
       const dx = cx - (card.w * scale) / 2;
       const dy = cy - (card.h * scale) / 2 + offsetY;
 
-      renderer.setAlpha(Math.min(1, p));
+      renderer.setAlphaO(Math.min(1, p));
 
       // Card border
-      renderer.drawRect(dx - 1, dy - 1, card.w * scale + 2, card.h * scale + 2, '#555');
-      renderer.drawRect(dx, dy, card.w * scale, card.h * scale, '#2a2a3e');
-      renderer.drawRect(dx + 1, dy + 1, card.w * scale - 2, card.h * scale - 2, '#1a1a2e');
+      renderer.drawRectO(dx - 1, dy - 1, card.w * scale + 2, card.h * scale + 2, '#555');
+      renderer.drawRectO(dx, dy, card.w * scale, card.h * scale, '#2a2a3e');
+      renderer.drawRectO(dx + 1, dy + 1, card.w * scale - 2, card.h * scale - 2, '#1a1a2e');
 
       // Skill name
-      renderer.drawText(card.skill.name, dx + 8, dy + 8, {
-        color: '#fff', size: 10, align: 'left',
+      renderer.drawTextO(card.skill.name, dx + 8, dy + 8, {
+        color: '#fff', size: 12, align: 'left',
       });
       // Stack badge
       const stackText = card._stack > 0 ? `Lv.${card._stack + 1}` : 'NEW';
       const stackColor = card._stack > 0 ? '#ffcc00' : '#4ecdc4';
-      renderer.drawRect(dx + card.w * scale - 28, dy + 4, 24, 12, stackColor);
-      renderer.setAlpha(Math.min(1, p) * 0.3);
-      renderer.drawRect(dx + card.w * scale - 28, dy + 4, 24, 12, '#000');
-      renderer.setAlpha(Math.min(1, p));
-      renderer.drawText(stackText, dx + card.w * scale - 16, dy + 5, {
-        color: '#000', size: 7, align: 'center',
+      renderer.drawRectO(dx + card.w * scale - 30, dy + 4, 26, 14, stackColor);
+      renderer.setAlphaO(Math.min(1, p) * 0.3);
+      renderer.drawRectO(dx + card.w * scale - 30, dy + 4, 26, 14, '#000');
+      renderer.setAlphaO(Math.min(1, p));
+      renderer.drawTextO(stackText, dx + card.w * scale - 17, dy + 5, {
+        color: '#000', size: 8, align: 'center',
       });
       // Description
       for (let li = 0; li < card._descLines.length; li++) {
-        renderer.drawText(card._descLines[li], dx + 8, dy + 22 + li * 10, {
-          color: '#aaa', size: 7, align: 'left',
+        renderer.drawTextO(card._descLines[li], dx + 8, dy + 24 + li * 12, {
+          color: '#aaa', size: 9, align: 'left',
         });
       }
 
-      renderer.setAlpha(1);
+      renderer.setAlphaO(1);
     }
 
-    renderer.restoreTransform();
-    renderer.present();
+    renderer.endOverlay();
   }
 
   _wrapText(text, maxWidth, fontSize) {

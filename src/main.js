@@ -176,14 +176,14 @@ const gameLoop = new GameLoop({
       return;
     }
     scenes.render(alpha);
+    // FPS counter drawn as overlay after scene's present()
     if (scenes.getCurrentName() === 'game') {
-      renderer.applyTransform();
-      renderer.drawText(`${Math.round(gameLoop.fps)}fps`, 10, renderer.logicalHeight - 16, {
-        color: '#555', size: 8,
+      renderer.beginOverlay();
+      renderer.drawTextO(`${Math.round(gameLoop.fps)}fps`, 10, renderer.logicalHeight - 18, {
+        color: '#555', size: 9,
       });
-      renderer.restoreTransform();
+      renderer.endOverlay();
     }
-    renderer.present();
   },
 });
 
