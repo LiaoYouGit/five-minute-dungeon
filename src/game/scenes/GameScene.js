@@ -537,7 +537,6 @@ export class GameScene {
         if (enemy.components.ExplodeOnDeath) {
           const boom = enemy.components.ExplodeOnDeath;
           this.particles.emit(pt.x, pt.y, 15, { colors: ['#ff4444', '#ff8800', '#ffcc00'], speed: 120 });
-          this.camera.shake(5, 0.3);
           const nearby = this.world.query('Transform', 'EnemyTag', 'Health');
           for (const ne of nearby) {
             if (ne.id === enemy.id || !ne.active) continue;
@@ -564,13 +563,6 @@ export class GameScene {
       } else {
         this.audio.playHit();
       }
-    }
-
-    // 批量打击的屏幕震动反馈（根据总伤害）
-    if (totalDamage > 0) {
-      const shakeIntensity = Math.min(8, Math.max(1, totalDamage / 10));
-      const shakeDuration = Math.min(0.4, Math.max(0.1, totalDamage / 50));
-      this.camera.shake(shakeIntensity, shakeDuration);
     }
   }
 
@@ -663,7 +655,6 @@ export class GameScene {
       trailLength: 5,
       life: 0.6,
     });
-    this.camera.shake(5, 0.3);
 
     // Damage nearby enemies
     const nearby = this.world.query('Transform', 'EnemyTag', 'Health');
