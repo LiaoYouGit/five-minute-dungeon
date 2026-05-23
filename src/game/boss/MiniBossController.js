@@ -3,7 +3,7 @@ import { MathUtils } from '../../engine/MathUtils.js';
 const SKILLS = {
   CHARGE: { name: 'charge', cooldown: 20 },
   EARTHQUAKE: { name: 'earthquake', cooldown: 10 },
-  FIRE_BREATH: { name: 'fire', cooldown: 5 },
+  FIRE_BREATH: { name: 'fire', cooldown: 10 },
   NORMAL: { name: 'normal', cooldown: 0 },
 };
 
@@ -24,6 +24,7 @@ export class MiniBossController {
       charge: 0,
       earthquake: 0,
       fire: 0,
+      normal: 0,
     };
 
     // Charge state
@@ -31,6 +32,9 @@ export class MiniBossController {
 
     // Fire breath patches
     this.firePatches = [];
+
+    // Casting state for normal attack and fire breath
+    this._casting = null; // { skill, timer, maxTimer, angle, targetX, targetY }
   }
 
   spawn(x, y, maxHp = 40, onDeath = null) {
@@ -49,9 +53,10 @@ export class MiniBossController {
     this.timer = 0;
     this.onDeath = onDeath;
     // Reset cooldowns to 0 so boss can use skills immediately
-    this.skillCooldowns = { charge: 0, earthquake: 0, fire: 0 };
+    this.skillCooldowns = { charge: 0, earthquake: 0, fire: 0, normal: 0 };
     this.chargeState = null;
     this.firePatches = [];
+    this._casting = null;
   }
 
   update(dt) {
@@ -82,6 +87,12 @@ export class MiniBossController {
     if (this.chargeState) {
       this._updateCharge(dt);
       return; // Charge takes priority
+    }
+
+    // Update casting state
+    if (this._casting) {
+      this._updateCasting(dt);
+      return; // Casting takes priority
     }
 
     // Update fire patches
@@ -129,7 +140,9 @@ export class MiniBossController {
     if (this.skillCooldowns.charge <= 0) available.push('charge');
     if (this.skillCooldowns.earthquake <= 0) available.push('earthquake');
     if (this.skillCooldowns.fire <= 0) available.push('fire');
-    available.push('normal'); // always available
+    if (this.skillCooldowns.normal <= 0) available.push('normal');
+
+    if (available.length === 0) return;
 
     // Random selection
     const choice = available[Math.floor(Math.random() * available.length)];
@@ -258,32 +271,6 @@ export class MiniBossController {
     this.world.addComponent(fx, 'BurstFX', { radius, life: 0.4, maxLife: 0.4 });
   }
 
-  _fireBreath() {
-    const players = this.world.query('Transform', 'PlayerTag');
-    if (players.length === 0) return;
-    const pt = players[0].components.Transform;
-    const bt = this.entity.components.Transform;
-
-    const angle = MathUtils.angleBetween(bt, pt);
-    // Create 3 fire patches in a cone
-    const spreadAngles = [-0.2, 0, 0.2];
-    for (const spread of spreadAngles) {
-      const a = angle + spread;
-      const dist = 60 + Math.random() * 40;
-      const fx = {
-        x: MathUtils.clamp(bt.x + Math.cos(a) * dist, 20, this.LW - 20),
-        y: MathUtils.clamp(bt.y + Math.sin(a) * dist, 20, this.LH - 20),
-        radius: 25,
-        damage: 3, // Adjusted for player 100HP baseline (3% damage per tick)
-        duration: 3.0,
-        timer: 3.0,
-      };
-      this.firePatches.push(fx);
-    }
-
-    this.skillCooldowns.fire = SKILLS.FIRE_BREATH.cooldown;
-  }
-
   _updateFirePatches(dt) {
     const players = this.world.query('Transform', 'PlayerTag', 'Health');
     for (const patch of this.firePatches) {
@@ -306,20 +293,63 @@ export class MiniBossController {
   }
 
   _normalAttack() {
-    // Simple projectile towards player
+    const players = this.world.query('Transform', 'PlayerTag');
+    if (players.length === 0) return;
+    const pt = players[0].components.Transform;
+    const bt = this.entity.components.Transform;
+
+    if (MathUtils.distance(bt, pt) > 500) return;
+
+    const angle = MathUtils.angleBetween(bt, pt);
+    this._casting = { skill: 'normal', timer: 0.6, maxTimer: 0.6, angle, targetX: pt.x, targetY: pt.y };
+  }
+
+  _fireBreath() {
     const players = this.world.query('Transform', 'PlayerTag');
     if (players.length === 0) return;
     const pt = players[0].components.Transform;
     const bt = this.entity.components.Transform;
 
     const angle = MathUtils.angleBetween(bt, pt);
-    const p = this.world.createEntity();
-    this.world.addComponent(p, 'Transform', { x: bt.x, y: bt.y });
-    this.world.addComponent(p, 'Velocity', { x: Math.cos(angle) * 120, y: Math.sin(angle) * 120 });
-    this.world.addComponent(p, 'Sprite', { w: 6, h: 6, color: '#bb66ff', imageKey: 'mini_boss_bullet' });
-    this.world.addComponent(p, 'ProjectileTag', {});
-    this.world.addComponent(p, 'Damage', { value: 5 }); // Adjusted for player 100HP baseline (5% damage)
-    this.world.addComponent(p, 'Lifetime', { remaining: 3.0 });
+    this._casting = { skill: 'fire', timer: 0.8, maxTimer: 0.8, angle, targetX: pt.x, targetY: pt.y };
+
+    this.skillCooldowns.fire = SKILLS.FIRE_BREATH.cooldown;
+  }
+
+  _updateCasting(dt) {
+    if (!this._casting) return;
+    this._casting.timer -= dt;
+    if (this._casting.timer <= 0) {
+      const cast = this._casting;
+      this._casting = null;
+      const bt = this.entity.components.Transform;
+
+      if (cast.skill === 'normal') {
+        const p = this.world.createEntity();
+        this.world.addComponent(p, 'Transform', { x: bt.x, y: bt.y });
+        this.world.addComponent(p, 'Velocity', { x: Math.cos(cast.angle) * 120, y: Math.sin(cast.angle) * 120 });
+        this.world.addComponent(p, 'Sprite', { w: 6, h: 6, color: '#bb66ff', imageKey: 'mini_boss_bullet' });
+        this.world.addComponent(p, 'ProjectileTag', {});
+        this.world.addComponent(p, 'Damage', { value: 5 });
+        this.world.addComponent(p, 'Lifetime', { remaining: 3.0 });
+        this.skillCooldowns.normal = 4.0;
+      } else if (cast.skill === 'fire') {
+        const spreadAngles = [-0.2, 0, 0.2];
+        for (const spread of spreadAngles) {
+          const a = cast.angle + spread;
+          const dist = 60 + Math.random() * 40;
+          const fx = {
+            x: MathUtils.clamp(bt.x + Math.cos(a) * dist, 20, this.LW - 20),
+            y: MathUtils.clamp(bt.y + Math.sin(a) * dist, 20, this.LH - 20),
+            radius: 25,
+            damage: 3,
+            duration: 3.0,
+            timer: 3.0,
+          };
+          this.firePatches.push(fx);
+        }
+      }
+    }
   }
 
   // ── Rendering ──────────────────────────────────────────
@@ -345,6 +375,54 @@ export class MiniBossController {
       ctx.moveTo(sx, sy);
       ctx.lineTo(tx, ty);
       ctx.stroke();
+      ctx.restore();
+    }
+
+    // Render casting indicator
+    if (this._casting) {
+      const ctx = renderer.ctx;
+      const bt = this.entity.components.Transform;
+      const bsx = bt.x - cam.offsetX;
+      const bsy = bt.y - cam.offsetY;
+      const progress = 1 - (this._casting.timer / this._casting.maxTimer);
+
+      ctx.save();
+      // Pulsing glow
+      const glowPulse = 0.4 + progress * 0.5;
+      ctx.globalAlpha = glowPulse;
+      const castColor = this._casting.skill === 'fire' ? '#ff4400' : '#bb66ff';
+      ctx.fillStyle = castColor;
+      ctx.beginPath();
+      ctx.arc(bsx, bsy, 22 + progress * 6, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Progress arc
+      ctx.globalAlpha = 0.9;
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(bsx, bsy, 28, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * progress);
+      ctx.stroke();
+
+      // Aim line toward target
+      ctx.globalAlpha = 0.5 + Math.sin(this.timer * 12) * 0.3;
+      ctx.strokeStyle = castColor;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(bsx, bsy);
+      const aimLen = 60;
+      ctx.lineTo(bsx + Math.cos(this._casting.angle) * aimLen, bsy + Math.sin(this._casting.angle) * aimLen);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // "!" warning text
+      ctx.globalAlpha = 0.8 + Math.sin(this.timer * 10) * 0.2;
+      ctx.fillStyle = '#ff0';
+      ctx.font = 'bold 12px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText('!', bsx, bsy - 22);
+
       ctx.restore();
     }
 

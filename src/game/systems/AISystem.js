@@ -65,6 +65,18 @@ export class AISystem {
         speed *= (1 + auraBuff.amount);
       }
 
+      // Stop movement during ranged casting
+      const rangedAttack = e.components.RangedAttack;
+      if (rangedAttack && rangedAttack.casting) {
+        speed = 0;
+      }
+
+      // Stop movement during elite casting (vampire bat swarm)
+      const elite = e.components.EliteTag;
+      if (elite && elite.batSwarmCasting) {
+        speed = 0;
+      }
+
       ai.timer += dt;
 
       switch (ai.type) {

@@ -61,6 +61,26 @@ export class WeaponSystem {
     }
   }
 
+  /** Find nearest enemy with clear line-of-sight (no walls blocking) */
+  _findNearestVisible(pt, maxRange) {
+    const enemies = this.world.query('Transform', 'EnemyTag');
+    // Sort by distance so we try closest first
+    const sorted = [];
+    for (const e of enemies) {
+      if (!e.active) continue;
+      const d = MathUtils.distance(pt, e.components.Transform);
+      if (d < maxRange) sorted.push({ e, d });
+    }
+    sorted.sort((a, b) => a.d - b.d);
+    for (const { e } of sorted) {
+      const et = e.components.Transform;
+      if (this._hasLineOfSight(pt.x, pt.y, et.x, et.y)) {
+        return e;
+      }
+    }
+    return null;
+  }
+
   _findNearestEnemy(pt, maxRange) {
     const enemies = this.world.query('Transform', 'EnemyTag');
     let nearest = null;
@@ -76,10 +96,32 @@ export class WeaponSystem {
     return nearest;
   }
 
+  /** Check line-of-sight between two points using the tilemap */
+  _hasLineOfSight(ax, ay, bx, by) {
+    if (!this._tileMap) return true;
+    const ts = this._tileMap.tileSize;
+    const dx = bx - ax;
+    const dy = by - ay;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const steps = Math.ceil(dist / (ts * 0.5));
+    if (steps === 0) return true;
+    for (let i = 1; i < steps; i++) {
+      const t = i / steps;
+      const col = Math.floor((ax + dx * t) / ts);
+      const row = Math.floor((ay + dy * t) / ts);
+      if (this._tileMap.isWall(col, row)) return false;
+    }
+    return true;
+  }
+
+  setTileMap(tileMap) {
+    this._tileMap = tileMap;
+  }
+
   _fireRanged(pt, dmg, def, level, buffs) {
     const rangeMult = buffs.rangeMult || 1;
-    const range = (def.baseSpeed || 220) * rangeMult;
-    const nearest = this._findNearestEnemy(pt, 220 * rangeMult);
+    const range = 500 * rangeMult;
+    const nearest = this._findNearestEnemy(pt, range);
     if (!nearest) return false;
 
     const et = nearest.components.Transform;

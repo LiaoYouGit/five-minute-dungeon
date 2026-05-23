@@ -3,9 +3,9 @@ import { MathUtils } from '../../engine/MathUtils.js';
 const PHASE_THRESHOLDS = [0.6, 0.3]; // Phase 2 @ 60%, Phase 3 @ 30%
 
 const PHASE_CONFIG = {
-  1: { attackCooldown: 2.5, moveSpeed: 40, color: '#c0392b', size: 32 },
-  2: { attackCooldown: 2.0, moveSpeed: 55, color: '#e74c3c', size: 36 },
-  3: { attackCooldown: 1.5, moveSpeed: 70, color: '#ff0000', size: 42 },
+  1: { attackCooldown: 5.0, moveSpeed: 40, color: '#c0392b', size: 32 },
+  2: { attackCooldown: 4.0, moveSpeed: 55, color: '#e74c3c', size: 36 },
+  3: { attackCooldown: 3.0, moveSpeed: 70, color: '#ff0000', size: 42 },
 };
 
 export class FinalBossController {
@@ -59,6 +59,8 @@ export class FinalBossController {
     this.onDeath = null;
   }
 
+  isPhaseTransitioning() { return this.phaseTransitioning; }
+
   spawn(x, y, maxHp = 120, onDeath = null) {
     this.entity = this.world.createEntity();
     this.world.addComponent(this.entity, 'Transform', { x, y });
@@ -94,8 +96,28 @@ export class FinalBossController {
     this.abyssGaze = null;
     this.warningData = [];
 
-    if (this.deps.camera) this.deps.camera.shake(6, 0.5);
-    if (this.deps.audio) this.deps.audio.play('levelup');
+    // Spawn cinematic
+    this.phaseTransitioning = true;
+    this.phaseTransitionTimer = 3.0;
+    this.phaseTransitionEffect = {
+      type: 'spawn',
+      startTime: this.timer,
+      duration: 3.0,
+    };
+
+    if (this.deps.camera) this.deps.camera.shake(8, 1.5);
+    if (this.deps.audio) this.deps.audio.playLevelUp();
+
+    const bt = this.entity.components.Transform;
+    if (this.deps.particles) {
+      this.deps.particles.emit(bt.x, bt.y, 60, {
+        colors: ['#c0392b', '#ff0000', '#ff4444', '#ffffff'],
+        speed: 250,
+        life: 2.0,
+        sizeMin: 3,
+        sizeMax: 7,
+      });
+    }
   }
 
   update(dt) {
@@ -526,7 +548,7 @@ export class FinalBossController {
       startAngle: Math.random() * Math.PI * 2,
     };
 
-    this.skillCooldowns.ringBarrage = 5.0;
+    this.skillCooldowns.ringBarrage = 10.0;
   }
 
   _groundSpike(bt, pt) {
@@ -630,7 +652,7 @@ export class FinalBossController {
       elapsed: 0,
     };
 
-    this.skillCooldowns.rotatingBarrage = 6.0;
+    this.skillCooldowns.rotatingBarrage = 12.0;
   }
 
   _domainPressure(bt) {
@@ -688,8 +710,11 @@ export class FinalBossController {
       this.world.addComponent(eye, 'FloatingEyeAI', {
         orbitAngle: angle,
         orbitRadius: 80,
-        shootCooldown: 2.0,
+        shootCooldown: 4.0,
         shootTimer: 1.0,
+        casting: false,
+        castTime: 0.6,
+        castTimer: 0,
       });
 
       this.trackingEyes.push(eye.id);
@@ -703,7 +728,7 @@ export class FinalBossController {
       });
     }
 
-    this.skillCooldowns.trackingEye = 15.0;
+    this.skillCooldowns.trackingEye = 30.0;
   }
 
   _chainBind(bt, pt) {
@@ -740,7 +765,7 @@ export class FinalBossController {
       targetAngle: MathUtils.angleBetween(bt, pt),
     };
 
-    this.skillCooldowns.chainBind = 8.0;
+    this.skillCooldowns.chainBind = 16.0;
   }
 
   // Phase 3 Skills
@@ -770,8 +795,11 @@ export class FinalBossController {
       this.world.addComponent(clone, 'EnemyTag', {});
       this.world.addComponent(clone, 'MirrorCloneTag', {
         skillChance: 0.5,
-        attackCooldown: 3.0,
+        attackCooldown: 6.0,
         attackTimer: Math.random() * 2.0,
+        casting: false,
+        castTime: 0.6,
+        castTimer: 0,
       });
 
       this.mirrorClones.push(clone.id);
@@ -824,7 +852,7 @@ export class FinalBossController {
       damage,
     };
 
-    this.skillCooldowns.darkWave = 15.0;
+    this.skillCooldowns.darkWave = 30.0;
   }
 
   _rotatingLaser(bt) {
@@ -1353,17 +1381,24 @@ export class FinalBossController {
       et.x = bt.x + Math.cos(ai.orbitAngle) * ai.orbitRadius;
       et.y = bt.y + Math.sin(ai.orbitAngle) * ai.orbitRadius;
 
-      // Shoot projectile
-      ai.shootTimer -= dt;
-      if (ai.shootTimer <= 0) {
-        ai.shootTimer = ai.shootCooldown;
-
-        const players = this.world.query('Transform', 'PlayerTag');
-        if (players.length > 0) {
-          const pt = players[0].components.Transform;
-          const angle = MathUtils.angleBetween(et, pt);
-
-          this._fireProjectile(et.x, et.y, angle, 100, '#bb66ff', 'eye_projectile');
+      // Shoot projectile (with cast time)
+      if (ai.casting) {
+        ai.castTimer -= dt;
+        if (ai.castTimer <= 0) {
+          ai.casting = false;
+          const players = this.world.query('Transform', 'PlayerTag');
+          if (players.length > 0) {
+            const pt = players[0].components.Transform;
+            const angle = MathUtils.angleBetween(et, pt);
+            this._fireProjectile(et.x, et.y, angle, 100, '#bb66ff', 'eye_projectile');
+          }
+        }
+      } else {
+        ai.shootTimer -= dt;
+        if (ai.shootTimer <= 0) {
+          ai.shootTimer = ai.shootCooldown;
+          ai.casting = true;
+          ai.castTimer = ai.castTime;
         }
       }
     }
@@ -1396,25 +1431,31 @@ export class FinalBossController {
       ct.x = bt.x + Math.cos(angle) * 80;
       ct.y = bt.y + Math.sin(angle) * 80;
 
-      // Use skills
-      tag.attackTimer -= dt;
-      if (tag.attackTimer <= 0 && Math.random() < tag.skillChance) {
-        tag.attackTimer = tag.attackCooldown;
-
-        const players = this.world.query('Transform', 'PlayerTag');
-        if (players.length > 0) {
-          const pt = players[0].components.Transform;
-          if (Math.random() < 0.5) {
-            // Fan slash (simplified)
-            const angle = MathUtils.angleBetween(ct, pt);
-            this._fireProjectile(ct.x, ct.y, angle, 80, '#ff4444', 'boss_bullet');
-          } else {
-            // Ring barrage (simplified)
-            for (let i = 0; i < 6; i++) {
-              const a = (Math.PI * 2 / 6) * i;
-              this._fireProjectile(ct.x, ct.y, a, 60, '#ff4444', 'boss_bullet');
+      // Use skills (with cast time)
+      if (tag.casting) {
+        tag.castTimer -= dt;
+        if (tag.castTimer <= 0) {
+          tag.casting = false;
+          const players = this.world.query('Transform', 'PlayerTag');
+          if (players.length > 0) {
+            const pt = players[0].components.Transform;
+            if (Math.random() < 0.5) {
+              const angle = MathUtils.angleBetween(ct, pt);
+              this._fireProjectile(ct.x, ct.y, angle, 80, '#ff4444', 'boss_bullet');
+            } else {
+              for (let i = 0; i < 6; i++) {
+                const a = (Math.PI * 2 / 6) * i;
+                this._fireProjectile(ct.x, ct.y, a, 60, '#ff4444', 'boss_bullet');
+              }
             }
           }
+        }
+      } else {
+        tag.attackTimer -= dt;
+        if (tag.attackTimer <= 0 && Math.random() < tag.skillChance) {
+          tag.attackTimer = tag.attackCooldown;
+          tag.casting = true;
+          tag.castTimer = tag.castTime;
         }
       }
     }
@@ -1570,6 +1611,67 @@ export class FinalBossController {
       ctx.restore();
     }
 
+    // Render casting indicators for tracking eyes and mirror clones
+    for (const eyeId of this.trackingEyes) {
+      const eye = this.world.getEntity(eyeId);
+      if (!eye || !eye.active) continue;
+      const ai = eye.components.FloatingEyeAI;
+      if (!ai || !ai.casting) continue;
+      const et = eye.components.Transform;
+      const esx = et.x - cam.offsetX;
+      const esy = et.y - cam.offsetY;
+      const progress = 1 - (ai.castTimer / ai.castTime);
+
+      ctx.save();
+      ctx.globalAlpha = 0.4 + progress * 0.4;
+      ctx.fillStyle = '#bb66ff';
+      ctx.beginPath();
+      ctx.arc(esx, esy, 8 + progress * 3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 0.9;
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(esx, esy, 11, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * progress);
+      ctx.stroke();
+      ctx.globalAlpha = 0.8;
+      ctx.fillStyle = '#ff0';
+      ctx.font = 'bold 8px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText('!', esx, esy - 12);
+      ctx.restore();
+    }
+
+    for (const cloneId of this.mirrorClones) {
+      const clone = this.world.getEntity(cloneId);
+      if (!clone || !clone.active) continue;
+      const tag = clone.components.MirrorCloneTag;
+      if (!tag || !tag.casting) continue;
+      const ct = clone.components.Transform;
+      const csx = ct.x - cam.offsetX;
+      const csy = ct.y - cam.offsetY;
+      const progress = 1 - (tag.castTimer / tag.castTime);
+
+      ctx.save();
+      ctx.globalAlpha = 0.4 + progress * 0.4;
+      ctx.fillStyle = '#ff4444';
+      ctx.beginPath();
+      ctx.arc(csx, csy, 14 + progress * 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 0.9;
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(csx, csy, 18, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * progress);
+      ctx.stroke();
+      ctx.globalAlpha = 0.8;
+      ctx.fillStyle = '#ff0';
+      ctx.font = 'bold 10px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText('!', csx, csy - 18);
+      ctx.restore();
+    }
+
     // Render phase transition effects
     if (this.phaseTransitioning && this.phaseTransitionEffect) {
       ctx.save();
@@ -1586,13 +1688,41 @@ export class FinalBossController {
       const sx = bt.x - cam.offsetX;
       const sy = bt.y - cam.offsetY;
 
-      if (effect.type === 'fog') {
+      if (effect.type === 'spawn') {
+        // Spawn cinematic: expanding ring + text
+        const progress = 1 - alpha;
+        ctx.globalAlpha = alpha * 0.5;
+        ctx.strokeStyle = '#ff4444';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(sx, sy, progress * 200, 0, Math.PI * 2);
+        ctx.stroke();
+
+        ctx.globalAlpha = Math.min(1, alpha * 2);
+        ctx.fillStyle = '#ff2222';
+        ctx.font = 'bold 18px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('BOSS', renderer.logicalWidth / 2, renderer.logicalHeight / 2 - 10);
+        ctx.font = '11px monospace';
+        ctx.fillStyle = '#ff6666';
+        ctx.fillText('深渊领主降临', renderer.logicalWidth / 2, renderer.logicalHeight / 2 + 12);
+      } else if (effect.type === 'fog') {
         const radius = (effect.duration - this.phaseTransitionTimer) * 100;
         ctx.globalAlpha = alpha * 0.6;
         ctx.fillStyle = effect.color;
         ctx.beginPath();
         ctx.arc(sx, sy, radius, 0, Math.PI * 2);
         ctx.fill();
+
+        // Phase text
+        ctx.globalAlpha = Math.min(1, alpha * 2);
+        ctx.fillStyle = '#ff4444';
+        ctx.font = 'bold 16px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('PHASE 2', renderer.logicalWidth / 2, renderer.logicalHeight / 2 - 10);
+        ctx.font = '10px monospace';
+        ctx.fillStyle = '#ff8888';
+        ctx.fillText('深渊觉醒', renderer.logicalWidth / 2, renderer.logicalHeight / 2 + 10);
       } else if (effect.type === 'bloodMoon') {
         // Screen overlay
         ctx.globalAlpha = alpha * 0.4;
@@ -1605,6 +1735,16 @@ export class FinalBossController {
         ctx.beginPath();
         ctx.arc(renderer.logicalWidth / 2, 30, 20, 0, Math.PI * 2);
         ctx.fill();
+
+        // Phase text
+        ctx.globalAlpha = Math.min(1, alpha * 2);
+        ctx.fillStyle = '#ff0000';
+        ctx.font = 'bold 20px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('PHASE 3', renderer.logicalWidth / 2, renderer.logicalHeight / 2 - 10);
+        ctx.font = '12px monospace';
+        ctx.fillStyle = '#ff4444';
+        ctx.fillText('终极形态', renderer.logicalWidth / 2, renderer.logicalHeight / 2 + 14);
       }
 
       ctx.restore();

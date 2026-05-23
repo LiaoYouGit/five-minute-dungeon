@@ -21,6 +21,7 @@ import { FlowField } from '../../engine/FlowField.js';
 import { SupplySystem } from '../run/SupplySystem.js';
 import { WEAPONS } from '../data/weapons.js';
 import { getCharacterById } from '../data/characters.js';
+import { PoisonCircleSystem } from '../systems/PoisonCircleSystem.js';
 
 export class GameScene {
   constructor(renderer, input, audio, particles, assets, onLevelUp, onGameOver) {
@@ -40,6 +41,8 @@ export class GameScene {
     this.bossWarningTimer = 0;
     this._currentBuffs = {};
     this._levelUpFlash = 0;
+    this.poisonCircle = new PoisonCircleSystem();
+    this.bossArena = null; // { cx, cy, radius } — circular boss arena constraint
   }
 
   onResume() {
@@ -67,13 +70,13 @@ export class GameScene {
 
     // Boss boundary state (结界状态)
     this.bossBoundaryActive = false;
-    this.bossBoundaryRect = null; // { minX, maxX, minY, maxY }
+    this.bossBoundaryRect = null;
 
     const getBuffs = () => this.skillMgr.getBuffs();
 
     // Generate dungeon
     const gen = new DungeonGenerator(100, 140);
-    const { map, rooms, supplyPoints } = gen.generate();
+    const { map, rooms, supplyPoints, enemySpawnPoints } = gen.generate();
     this.tileMap = map;
     this.rooms = rooms;
     this.supplyPoints = supplyPoints;
@@ -90,8 +93,11 @@ export class GameScene {
     this.movement = new MovementSystem(this.world, this.input);
     this.movement.setBounds(LW, LH);
     this.autoAttack = new WeaponSystem(this.world, getBuffs, (hits, weaponType) => this._onMeleeHit(hits, weaponType));
+    this.autoAttack.setTileMap(this.tileMap);
     this.enemySpawn = new EnemySpawnSystem(this.world, LW, LH, this.run);
     this.enemySpawn.setTileMap(this.tileMap);
+    this.enemySpawn.setSpawnPoints(enemySpawnPoints || []);
+    this.enemySpawn.setMaxAttackRange(Math.sqrt(this.LW * this.LW + this.LH * this.LH));
     this.ai = new AISystem(this.world, getBuffs);
     this.flowField = new FlowField(this.tileMap);
     this.ai.setFlowField(this.flowField);
@@ -111,6 +117,7 @@ export class GameScene {
       this.world.addComponent(p, 'Damage', { value: damage });
       this.world.addComponent(p, 'Lifetime', { remaining: 3.0 });
     });
+    this.eliteSkills.setMaxAttackRange(Math.sqrt(this.LW * this.LW + this.LH * this.LH));
 
     // Boss
     this.boss = new FinalBossController(this.world, LW, LH, {
@@ -159,6 +166,8 @@ export class GameScene {
       enemySpawnSystem: this.enemySpawn,
       LW, LH,
       gameTime: 0,
+      rooms: this.rooms,
+      tileMap: this.tileMap,
     });
 
     // Player
@@ -176,22 +185,22 @@ export class GameScene {
       w: 14,
       h: 14,
       color: this.character ? this.character.color : '#4ecdc4',
-      imageKey: this.characterId || 'player'
+      imageKey: 'player_front'
     });
     this.world.addComponent(this.player, 'Health', { hp: playerHp, maxHp: playerHp, invTimer: 0 });
     this.world.addComponent(this.player, 'PlayerTag', {});
     this.world.addComponent(this.player, 'PlayerSpeed', { value: playerSpeed });
     this.world.addComponent(this.player, 'Weapons', {
       slots: {
-        ranged:          { level: 1, cooldown: 0 },
-        melee_slash:     { level: 0, cooldown: 0 },
-        melee_orbit:     { level: 0, cooldown: 0, hitTimers: new Map() },
-        melee_burst:     { level: 0, cooldown: 0 },
-        pierce_spear:    { level: 0, cooldown: 0 },
-        fireball:        { level: 0, cooldown: 0 },
+        ranged: { level: 1, cooldown: 0 },
+        melee_slash: { level: 0, cooldown: 0 },
+        melee_orbit: { level: 0, cooldown: 0, hitTimers: new Map() },
+        melee_burst: { level: 0, cooldown: 0 },
+        pierce_spear: { level: 0, cooldown: 0 },
+        fireball: { level: 0, cooldown: 0 },
         chain_lightning: { level: 0, cooldown: 0 },
-        boomerang:       { level: 0, cooldown: 0 },
-        ice_shard:       { level: 0, cooldown: 0 },
+        boomerang: { level: 0, cooldown: 0 },
+        ice_shard: { level: 0, cooldown: 0 },
       },
     });
     this.world.addComponent(this.player, 'Collider', { radius: 7 });
@@ -219,7 +228,8 @@ export class GameScene {
     const buffs = this.skillMgr.getBuffs();
     this._currentBuffs = buffs;
     const speed = this.player.components.PlayerSpeed;
-    speed.value = 120 * buffs.playerSpeedMult;
+    const charSpeed = this.character ? this.character.baseStats.speed : 80;
+    speed.value = charSpeed * buffs.playerSpeedMult;
     // Weapon levels are read directly from skillMgr via _applyWeaponLevels
     this._applyWeaponLevels();
   }
@@ -266,7 +276,7 @@ export class GameScene {
       ctx.globalAlpha = alpha * (fx.maxLevel ? 0.85 : 0.7);
       if (slashImg) {
         ctx.translate(sx, sy);
-        ctx.rotate(fx.angle);
+        ctx.rotate(fx.angle + Math.PI); // slash.png faces left by default
         const scale = (fx.range * 2) / slashImg.width;
         ctx.scale(scale, scale);
         if (fx.maxLevel) {
@@ -467,22 +477,22 @@ export class GameScene {
       const explode = projectile.components.ExplodeOnHit;
       if (explode) {
         // 火球爆炸特效：圆形粒子、发光、重力、拖尾
-      this.particles.emit(pt.x, pt.y, 20, {
-        colors: ['#ff5522', '#ffaa00', '#fff'],
-        speed: 150,
-        life: 0.7,
-        sizeMin: 2,
-        sizeMax: 4,
-        shape: 'circle',
-        gravity: 80,
-        glow: true,
-        glowIntensity: 2,
-        trail: true,
-        trailLength: 5,
-        scaleAnimation: true,
-        scaleStart: 1.5,
-        scaleEnd: 0.2,
-      });
+        this.particles.emit(pt.x, pt.y, 20, {
+          colors: ['#ff5522', '#ffaa00', '#fff'],
+          speed: 150,
+          life: 0.7,
+          sizeMin: 2,
+          sizeMax: 4,
+          shape: 'circle',
+          gravity: 80,
+          glow: true,
+          glowIntensity: 2,
+          trail: true,
+          trailLength: 5,
+          scaleAnimation: true,
+          scaleStart: 1.5,
+          scaleEnd: 0.2,
+        });
         const nearbyEnemies = this.world.query('Transform', 'EnemyTag', 'Health');
         for (const ne of nearbyEnemies) {
           if (ne.id === enemy.id || !ne.active) continue;
@@ -573,34 +583,36 @@ export class GameScene {
   // ── Boss Boundary Methods (结界方法) ──
 
   _activateBossBoundary() {
-    // Calculate boundary based on current camera viewport
-    const cam = this.camera;
     const pt = this.player.components.Transform;
-
-    // Boundary is centered on player position with viewport size
-    const boundaryWidth = this.LW * 0.6; // 60% of viewport width
-    const boundaryHeight = this.LH * 0.6; // 60% of viewport height
-
+    const boundaryWidth = this.LW * 0.6;
+    const boundaryHeight = this.LH * 0.6;
     const minX = Math.max(0, pt.x - boundaryWidth / 2);
     const maxX = Math.min(this.tileMap.width, pt.x + boundaryWidth / 2);
     const minY = Math.max(0, pt.y - boundaryHeight / 2);
     const maxY = Math.min(this.tileMap.height, pt.y + boundaryHeight / 2);
-
     this.bossBoundaryRect = { minX, maxX, minY, maxY };
     this.bossBoundaryActive = true;
-
-    // Visual feedback
     this.camera.shake(5, 0.4);
-    console.log('Boss boundary activated:', this.bossBoundaryRect);
+  }
+
+  _activateBossArena(cx, cy, radius) {
+    this.bossArena = { cx, cy, radius };
+    this.camera.shake(8, 0.6);
   }
 
   _deactivateBossBoundary() {
     this.bossBoundaryActive = false;
     this.bossBoundaryRect = null;
-
-    // Visual feedback
+    this.bossArena = null;
+    this.poisonCircle.reset();
     this.camera.shake(3, 0.3);
-    console.log('Boss boundary deactivated');
+  }
+
+  /** Pick a random room (non-spawn, non-boss) as boss spawn location */
+  _pickBossRoom() {
+    const eligible = this.rooms.filter(r => !r.isSpawn && !r.isBoss);
+    if (eligible.length === 0) return this.rooms[this.rooms.length - 1] || this.rooms[0];
+    return eligible[Math.floor(Math.random() * eligible.length)];
   }
 
   _spawnHazard(x, y) {
@@ -671,7 +683,7 @@ export class GameScene {
     if (!isMinion) {
       this.audio.playKill();
       const expMult = this._currentBuffs.expMult || 1;
-      const expValue = 1 + Math.floor(this.expSystem.level / 2);
+      const expValue = 1 + Math.floor(this.expSystem.level / 4);
       this.expSystem.spawnGem(et.x, et.y, expValue, expMult);
       const scoreMult = this._currentBuffs.scoreMult || 1;
       const sv = Math.ceil((enemy.components.ScoreValue?.value ?? 10) * scoreMult);
@@ -707,13 +719,21 @@ export class GameScene {
     });
     this.camera.shake(3, 0.3);
     this._levelUpFlash = 0.5;
+
+    // Linear growth: level up restores HP and boosts stats
+    const ph = this.player.components.Health;
+    ph.maxHp += 10;
+    ph.hp = ph.maxHp;
+    const ps = this.player.components.PlayerSpeed;
+    ps.value += 2;
+
     this.paused = true;
     const choices = this.skillMgr.rollChoices(3, level, this.player);
     this.onLevelUp(level, choices, (skill) => {
       this.skillMgr.acquire(skill);
       this.run.addSkill(skill);
 
-      // Instant effects: heal, max_hp, damage_all
+      // Instant effects: heal, max_hp, hp_up, damage_all
       if (skill.id === 'heal') {
         const ph = this.player.components.Health;
         ph.hp = Math.min(ph.hp + 1, ph.maxHp);
@@ -721,6 +741,10 @@ export class GameScene {
         const ph = this.player.components.Health;
         ph.maxHp += 1;
         ph.hp += 1;
+      } else if (skill.id === 'hp_up') {
+        const ph = this.player.components.Health;
+        ph.maxHp += 20;
+        ph.hp = ph.maxHp;
       } else if (skill.id === 'damage_all') {
         const buffs = this.skillMgr.getBuffs();
         const enemies = this.world.query('Transform', 'EnemyTag', 'Health');
@@ -748,10 +772,10 @@ export class GameScene {
     if (this._levelUpFlash > 0) this._levelUpFlash -= dt;
     if (this.paused) return;
 
-    // Check if any boss is active (final boss or mini bosses)
+    // Check if any boss is active (final boss or timed mini-boss, NOT supply-point minibosses)
     const bossActive = this.boss && this.boss.active;
-    const miniBossesActive = this.supplySystem && this.supplySystem.miniBosses && this.supplySystem.miniBosses.length > 0;
-    const inBossFight = bossActive || miniBossesActive;
+    const timedMiniBossActive = this.supplySystem && this.supplySystem.isTimedMiniBossActive();
+    const inBossFight = bossActive || timedMiniBossActive;
 
     // Only update timer if not in boss fight
     if (!inBossFight) {
@@ -770,7 +794,10 @@ export class GameScene {
 
     const playerAlive = this.player && this.player.active && this.player.components.Health.hp > 0;
 
-    if (playerAlive) {
+    // Boss phase transition: freeze everything except boss and particles
+    const bossPhaseTransition = this.boss.active && this.boss.isPhaseTransitioning();
+
+    if (playerAlive && !bossPhaseTransition) {
       const pt = this.player.components.Transform;
       const oldPX = pt.x;
       const oldPY = pt.y;
@@ -785,47 +812,48 @@ export class GameScene {
       }
     }
 
-    if (playerAlive) this.autoAttack.update(dt);
-
-    // Boss spawn at 4:30 (normal mode only)
+    // Enemy spawn BEFORE weapon update so enemies exist when weapons try to fire
+    // Final boss: poison circle starts 60s before boss spawns
     if (!this.run.isEndless()) {
-      if (!this.bossSpawned && this.run.timeRemaining <= 30) {
+      // Trigger poison circle early enough for 60s shrink
+      if (!this.bossSpawned && this.run.timeRemaining <= 90 && !this.poisonCircle.isActive()) {
+        const bossRoom = this._pickBossRoom();
+        const ts = this.tileMap.tileSize;
+        const arenaCx = bossRoom.cx * ts + ts / 2;
+        const arenaCy = bossRoom.cy * ts + ts / 2;
+        const arenaRadius = Math.min(bossRoom.w, bossRoom.h) * ts * 0.4;
+        const mapMaxRadius = Math.max(this.tileMap.width, this.tileMap.height);
+        this.poisonCircle.trigger(arenaCx, arenaCy, arenaRadius, mapMaxRadius);
+        this.bossSpawned = false; // not yet spawned, circle is shrinking
+        this._finalBossArena = { cx: arenaCx, cy: arenaCy, radius: arenaRadius };
+      }
+
+      // Spawn boss when poison circle finishes shrinking
+      if (this._finalBossArena && this.poisonCircle.state === 'stable' && !this.boss.active) {
+        const { cx, cy } = this._finalBossArena;
+        const bossHp = 5000;
+        this.boss.spawn(cx, cy, bossHp);
+        this.camera.shake(10, 1.0);
         this.bossSpawned = true;
-        this.bossWarningTimer = 2.0;
+        this._activateBossArena(cx, cy, this._finalBossArena.radius);
+        this._finalBossArena = null;
       }
 
-      if (this.bossWarningTimer > 0) {
-        this.bossWarningTimer -= dt;
-        if (this.bossWarningTimer <= 0 && !this.boss.active) {
-          const bossRoom = this.rooms.find(r => r.isBoss) || this.rooms[this.rooms.length - 1];
-          const bx = bossRoom.cx * this.tileMap.tileSize + this.tileMap.tileSize / 2;
-          const by = bossRoom.cy * this.tileMap.tileSize + this.tileMap.tileSize / 2;
-          const bossHp = 120; // Medium difficulty (5-6 minute fight with 100-150 HP baseline)
-          this.boss.spawn(bx, by, bossHp);
-          this.camera.shake(10, 1.0);
-
-          // Activate boss boundary (结界) when boss spawns
-          this._activateBossBoundary();
-        }
-      }
-
+      // Keep spawning during boss fight (reduced rate)
       if (!this.bossSpawned) {
-        this.enemySpawn.update(dt, this.run.gameTime);
+        this.enemySpawn.update(dt, this.run.gameTime, this.player?.components?.Transform);
       }
     } else {
-      this.enemySpawn.update(dt, this.run.gameTime);
+      this.enemySpawn.update(dt, this.run.gameTime, this.player?.components?.Transform);
     }
+
+    // Now update weapons - enemies have already been spawned this frame
+    if (playerAlive && !bossPhaseTransition) this.autoAttack.update(dt);
 
     // Supply system (spawns mission enemies, updates mini-bosses)
     if (this.supplySystem) {
       this.supplySystem.setGameTime(this.run.gameTime);
       this.supplySystem.update(dt, this.player);
-
-      // Detect mini boss spawn and activate boundary
-      const miniBossesActive = this.supplySystem.miniBosses && this.supplySystem.miniBosses.length > 0;
-      if (miniBossesActive && !this.bossBoundaryActive) {
-        this._activateBossBoundary();
-      }
     }
 
     // Boss update
@@ -840,13 +868,67 @@ export class GameScene {
       this._deactivateBossBoundary();
     }
 
-    // Check if all mini bosses are defeated
-    if (this.supplySystem && this.supplySystem.miniBosses) {
-      const miniBossesActive = this.supplySystem.miniBosses.length > 0;
-      if (!miniBossesActive && this.bossBoundaryActive && !this.boss.active) {
-        // All mini bosses defeated and no final boss - deactivate boundary
-        this._deactivateBossBoundary();
+    // Poison circle update
+    if (this.poisonCircle.isActive()) {
+      this.poisonCircle.update(dt, this.player);
+    }
+
+    // Circular boss arena constraint
+    if (this.bossArena && this.player && this.player.active) {
+      const pt = this.player.components.Transform;
+      const dx = pt.x - this.bossArena.cx;
+      const dy = pt.y - this.bossArena.cy;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist > this.bossArena.radius) {
+        const ratio = this.bossArena.radius / dist;
+        pt.x = this.bossArena.cx + dx * ratio;
+        pt.y = this.bossArena.cy + dy * ratio;
       }
+      // Constrain boss entity too
+      if (this.boss.entity && this.boss.entity.active) {
+        const bt = this.boss.entity.components.Transform;
+        const bdx = bt.x - this.bossArena.cx;
+        const bdy = bt.y - this.bossArena.cy;
+        const bdist = Math.sqrt(bdx * bdx + bdy * bdy);
+        if (bdist > this.bossArena.radius) {
+          const bratio = this.bossArena.radius / bdist;
+          bt.x = this.bossArena.cx + bdx * bratio;
+          bt.y = this.bossArena.cy + bdy * bratio;
+        }
+      }
+    }
+
+    // Mini-boss circular arena constraint
+    if (this.supplySystem && this.supplySystem._miniBossArena && this.player && this.player.active) {
+      const arena = this.supplySystem._miniBossArena;
+      const pt = this.player.components.Transform;
+      const dx = pt.x - arena.cx;
+      const dy = pt.y - arena.cy;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist > arena.radius) {
+        const ratio = arena.radius / dist;
+        pt.x = arena.cx + dx * ratio;
+        pt.y = arena.cy + dy * ratio;
+      }
+      for (const mb of this.supplySystem.miniBosses) {
+        if (mb.entity && mb.entity.active) {
+          const bt = mb.entity.components.Transform;
+          const bdx = bt.x - arena.cx;
+          const bdy = bt.y - arena.cy;
+          const bdist = Math.sqrt(bdx * bdx + bdy * bdy);
+          if (bdist > arena.radius) {
+            const bratio = arena.radius / bdist;
+            bt.x = arena.cx + bdx * bratio;
+            bt.y = arena.cy + bdy * bratio;
+          }
+        }
+      }
+    }
+
+    // Deactivate mini-boss arena when timed mini-boss is defeated
+    if (this.supplySystem && this.supplySystem._miniBossArena && !this.supplySystem.isTimedMiniBossActive()) {
+      this.supplySystem._miniBossArena = null;
+      this.supplySystem.miniBossPoisonCircle.reset();
     }
 
     // Update flow field for enemy pathfinding
@@ -862,7 +944,7 @@ export class GameScene {
     }
     const enemyOldPos = this._lastFrameEnemyPos || this._enemyOldPosPool;
 
-    this.ai.update(dt);
+    this.ai.update(bossPhaseTransition ? 0 : dt);
 
     // 重用Map而不是每帧创建新的
     this._enemyOldPosPool.clear();
@@ -886,10 +968,12 @@ export class GameScene {
     }
     this._lastFrameEnemyPos = this._enemyOldPosPool;
 
-    this.projectile.update(dt);
-    this.projectile.checkHits();
-    this.contactDmg.update(dt);
-    this.eliteSkills.update(dt, this.run.gameTime);
+    if (!bossPhaseTransition) {
+      this.projectile.update(dt);
+      this.projectile.checkHits();
+      this.contactDmg.update(dt);
+      this.eliteSkills.update(dt, this.run.gameTime);
+    }
     this.expSystem.update(dt);
     this.pickupSystem.update(dt, this._currentBuffs.magnetMult || 1);
     this.dmgNumbers.update(dt);
@@ -1004,12 +1088,17 @@ export class GameScene {
     }
 
     // Enemies (with HP bar for tough ones)
-    for (const e of this.world.query('Transform', 'EnemyTag', 'Sprite', 'Health')) {
+    const enemyRenderQuery = this.world.query('Transform', 'EnemyTag', 'Sprite', 'Health');
+
+    for (const e of enemyRenderQuery) {
+      if (!e.active) continue;
       const t = e.components.Transform;
       const s = e.components.Sprite;
       const sx = t.x - cam.offsetX;
       const sy = t.y - cam.offsetY;
+
       if (sx < -50 || sx > LW + 50 || sy < -50 || sy > LH + 50) continue;
+
 
       // Support aura visual
       const aura = e.components.SupportAura;
@@ -1060,15 +1149,113 @@ export class GameScene {
         renderer.setAlpha(1);
       }
 
+      // Ranged casting visual (charge-up before firing)
+      const ranged = e.components.RangedAttack;
+      if (ranged && ranged.casting) {
+        const castProgress = 1 - (ranged.castTimer / ranged.castTime);
+        const ctx2 = renderer.ctx;
+
+        ctx2.save();
+        // Pulsing glow
+        const glowAlpha = 0.3 + castProgress * 0.4;
+        ctx2.globalAlpha = glowAlpha;
+        ctx2.fillStyle = '#ffcc00';
+        ctx2.beginPath();
+        ctx2.arc(sx, sy, s.w + 2 + castProgress * 4, 0, Math.PI * 2);
+        ctx2.fill();
+
+        // Progress arc
+        ctx2.globalAlpha = 0.9;
+        ctx2.strokeStyle = '#ff8800';
+        ctx2.lineWidth = 2;
+        ctx2.beginPath();
+        ctx2.arc(sx, sy, s.w + 6, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * castProgress);
+        ctx2.stroke();
+
+        // Aim line toward player
+        const pt2 = this.player?.components?.Transform;
+        if (pt2) {
+          const aimAngle = MathUtils.angleBetween(t, pt2);
+          ctx2.globalAlpha = 0.4 + Math.sin(this.run.gameTime * 12) * 0.2;
+          ctx2.strokeStyle = '#ff4400';
+          ctx2.lineWidth = 1.5;
+          ctx2.setLineDash([3, 3]);
+          ctx2.beginPath();
+          ctx2.moveTo(sx, sy);
+          ctx2.lineTo(sx + Math.cos(aimAngle) * 35, sy + Math.sin(aimAngle) * 35);
+          ctx2.stroke();
+          ctx2.setLineDash([]);
+        }
+
+        // "!" warning
+        ctx2.globalAlpha = 0.8 + Math.sin(this.run.gameTime * 10) * 0.2;
+        ctx2.fillStyle = '#ff0';
+        ctx2.font = 'bold 10px Arial';
+        ctx2.textAlign = 'center';
+        ctx2.fillText('!', sx, sy - s.h / 2 - 6);
+
+        ctx2.restore();
+      }
+
+      // Elite casting visual (vampire bat swarm)
+      const elite = e.components.EliteTag;
+      if (elite && elite.batSwarmCasting) {
+        const castProgress = 1 - (elite.batSwarmCastTimer / 1.0);
+        const ctx2 = renderer.ctx;
+
+        ctx2.save();
+        // Pulsing glow
+        const glowAlpha = 0.4 + castProgress * 0.4;
+        ctx2.globalAlpha = glowAlpha;
+        ctx2.fillStyle = '#8e44ad';
+        ctx2.beginPath();
+        ctx2.arc(sx, sy, s.w + 4 + castProgress * 4, 0, Math.PI * 2);
+        ctx2.fill();
+
+        // Progress arc
+        ctx2.globalAlpha = 0.9;
+        ctx2.strokeStyle = '#bb66ff';
+        ctx2.lineWidth = 2.5;
+        ctx2.beginPath();
+        ctx2.arc(sx, sy, s.w + 8, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * castProgress);
+        ctx2.stroke();
+
+        // Aim line toward player
+        const pt2 = this.player?.components?.Transform;
+        if (pt2) {
+          const aimAngle = MathUtils.angleBetween(t, pt2);
+          ctx2.globalAlpha = 0.5 + Math.sin(this.run.gameTime * 12) * 0.2;
+          ctx2.strokeStyle = '#bb66ff';
+          ctx2.lineWidth = 2;
+          ctx2.setLineDash([4, 3]);
+          ctx2.beginPath();
+          ctx2.moveTo(sx, sy);
+          ctx2.lineTo(sx + Math.cos(aimAngle) * 40, sy + Math.sin(aimAngle) * 40);
+          ctx2.stroke();
+          ctx2.setLineDash([]);
+        }
+
+        // "!" warning
+        ctx2.globalAlpha = 0.8 + Math.sin(this.run.gameTime * 10) * 0.2;
+        ctx2.fillStyle = '#ff0';
+        ctx2.font = 'bold 11px Arial';
+        ctx2.textAlign = 'center';
+        ctx2.fillText('!', sx, sy - s.h / 2 - 7);
+
+        ctx2.restore();
+      }
+
       const eImg = s.imageKey ? this.assets.get(s.imageKey) : null;
+
       // Apply phase shift alpha to sprite
       const phaseAlpha = e.components.PhaseShift ? 0.3 : 1;
       if (eImg) {
-        renderer.setAlpha(phaseAlpha);
         const scale = s.w / eImg.width;
+        renderer.setAlpha(phaseAlpha);
         renderer.drawSprite(eImg, sx, sy, { scale });
         renderer.setAlpha(1);
       } else {
+        // Fallback: draw colored rectangle if image not found
         renderer.setAlpha(phaseAlpha);
         renderer.drawRect(sx - s.w / 2, sy - s.h / 2, s.w, s.h, s.color);
         renderer.setAlpha(1);
@@ -1206,12 +1393,10 @@ export class GameScene {
       const rect = this.bossBoundaryRect;
       const ctx = renderer.ctx;
 
-      // Boundary edges (red pulsing lines)
       const pulse = 0.5 + Math.sin(this.run.gameTime * 6) * 0.3;
       ctx.save();
       ctx.setTransform(1, 0, 0, 1, 0, 0);
 
-      // Convert world coordinates to screen coordinates
       const leftX = rect.minX - cam.offsetX;
       const rightX = rect.maxX - cam.offsetX;
       const topY = rect.minY - cam.offsetY;
@@ -1221,7 +1406,6 @@ export class GameScene {
       ctx.strokeStyle = '#ff0000';
       ctx.lineWidth = 4;
 
-      // Draw boundary rectangle
       ctx.beginPath();
       ctx.moveTo(leftX * renderer._sx, topY * renderer._sy);
       ctx.lineTo(rightX * renderer._sx, topY * renderer._sy);
@@ -1230,13 +1414,65 @@ export class GameScene {
       ctx.lineTo(leftX * renderer._sx, topY * renderer._sy);
       ctx.stroke();
 
-      // Boundary text
       ctx.globalAlpha = 0.8;
       ctx.fillStyle = '#ff0000';
       ctx.font = `${12 * renderer.dpr}px Arial`;
       ctx.textAlign = 'center';
       ctx.fillText('BOSS ARENA', (leftX + rightX) / 2 * renderer._sx, topY * renderer._sy - 10 * renderer.dpr);
 
+      ctx.restore();
+    }
+
+    // Poison circle rendering
+    if (this.poisonCircle.isActive()) {
+      this.poisonCircle.render(renderer, cam);
+    }
+
+    // Circular boss arena rendering
+    if (this.bossArena) {
+      const ctx = renderer.ctx;
+      const sx = this.bossArena.cx - cam.offsetX;
+      const sy = this.bossArena.cy - cam.offsetY;
+      const pulse = 0.5 + Math.sin(this.run.gameTime * 5) * 0.3;
+      ctx.save();
+      ctx.globalAlpha = pulse;
+      ctx.strokeStyle = '#ff3333';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(sx, sy, this.bossArena.radius, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 0.7;
+      ctx.fillStyle = '#ff0000';
+      ctx.font = '10px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText('BOSS ARENA', sx, sy - this.bossArena.radius - 8);
+      ctx.restore();
+    }
+
+    // Mini-boss poison circle rendering
+    if (this.supplySystem && this.supplySystem.miniBossPoisonCircle.isActive()) {
+      this.supplySystem.miniBossPoisonCircle.render(renderer, cam);
+    }
+
+    // Mini-boss arena rendering
+    if (this.supplySystem && this.supplySystem._miniBossArena) {
+      const ctx = renderer.ctx;
+      const arena = this.supplySystem._miniBossArena;
+      const sx = arena.cx - cam.offsetX;
+      const sy = arena.cy - cam.offsetY;
+      const pulse = 0.5 + Math.sin(this.run.gameTime * 5) * 0.3;
+      ctx.save();
+      ctx.globalAlpha = pulse;
+      ctx.strokeStyle = '#cc33ff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(sx, sy, arena.radius, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 0.7;
+      ctx.fillStyle = '#9933cc';
+      ctx.font = '10px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText('MINI BOSS ARENA', sx, sy - arena.radius - 8);
       ctx.restore();
     }
 
@@ -1271,8 +1507,8 @@ export class GameScene {
 
     // Timer, Supply warnings, Wave HUD - hide during boss fights
     const bossActive = this.boss && this.boss.active;
-    const miniBossesActive = this.supplySystem && this.supplySystem.miniBosses && this.supplySystem.miniBosses.length > 0;
-    const inBossFight = bossActive || miniBossesActive;
+    const timedMiniBossActive = this.supplySystem && this.supplySystem.isTimedMiniBossActive();
+    const inBossFight = bossActive || timedMiniBossActive;
 
     if (!inBossFight) {
       // Timer
@@ -1309,7 +1545,7 @@ export class GameScene {
       const waveTimer = this.enemySpawn.getWaveTimer();
       renderer.drawText(`Wave ${waveNum}`, LW / 2, 54, { color: '#aaa', size: 8, align: 'center' });
       if (waveWarning > 0) {
-        const isDanger = waveNum > 0 && (waveNum + 1) % 5 === 0;
+        const isDanger = waveNum > 0 && (waveNum + 1) % 3 === 0;
         const flashAlpha = Math.floor(run.gameTime * 6) % 2 === 0 ? 1 : 0.4;
         renderer.setAlpha(flashAlpha);
         if (isDanger) {
@@ -1318,8 +1554,27 @@ export class GameScene {
           renderer.drawText('WAVE INCOMING', LW / 2, 66, { color: '#ff6b35', size: 9, align: 'center', bold: true });
         }
         renderer.setAlpha(1);
-      } else if (waveNum > 0 && waveTimer > 0 && waveTimer < 30) {
+      } else if (waveNum > 0 && waveTimer > 0 && waveTimer < 20) {
         renderer.drawText(`Next: ${Math.ceil(waveTimer)}s`, LW / 2, 64, { color: '#666', size: 7, align: 'center' });
+      }
+
+      // Mini-boss countdown (poison circle warning)
+      if (this.supplySystem) {
+        const mbCountdown = this.supplySystem.getMiniBossCountdown();
+        if (mbCountdown) {
+          const flash = Math.floor(run.gameTime * 6) % 2 === 0;
+          if (mbCountdown.phase === 'warning') {
+            renderer.setAlpha(flash ? 1 : 0.5);
+            renderer.drawText('!! MINI BOSS !!', LW / 2, 78, { color: '#cc33ff', size: 10, align: 'center', bold: true });
+            renderer.drawText(`${mbCountdown.timeLeft}s`, LW / 2, 90, { color: '#cc33ff', size: 8, align: 'center' });
+            renderer.setAlpha(1);
+          } else if (mbCountdown.phase === 'shrinking') {
+            renderer.setAlpha(flash ? 1 : 0.6);
+            renderer.drawText('POISON SHRINKING', LW / 2, 78, { color: '#ff4444', size: 9, align: 'center', bold: true });
+            renderer.drawText(`${mbCountdown.timeLeft}s`, LW / 2, 90, { color: '#ff4444', size: 8, align: 'center' });
+            renderer.setAlpha(1);
+          }
+        }
       }
     }
 
@@ -1378,6 +1633,14 @@ export class GameScene {
       renderer.drawText(`RICO x${buffs.ricochet}`, 10, buffY, { color: '#f39c12', size: 7 });
     }
 
+    // DEBUG: enemy count & spawn info
+    const allEnemies = this.world.query('Transform', 'EnemyTag');
+    const enemyCount = allEnemies.length;
+    const spawned = this.enemySpawn.spawnCount || 0;
+    renderer.drawText(`敌人:${enemyCount} 已生成:${spawned}`, LW / 2, LH - 12, {
+      color: '#ff0', size: 8, align: 'center', font: 'monospace',
+    });
+
     // Boss HP bar
     if (this.boss && this.boss.active && this.boss.entity) {
       const bossHpRatio = Math.max(0, this.boss.hp / this.boss.maxHp);
@@ -1392,13 +1655,13 @@ export class GameScene {
       renderer.drawRect(bx, by, bw * bossHpRatio, 10, bColor);
 
       const bossName = this.boss.phase === 1 ? '深渊魔神 Phase 1' :
-                       this.boss.phase === 2 ? '深渊魔神 Phase 2' : '深渊魔神 Phase 3';
+        this.boss.phase === 2 ? '深渊魔神 Phase 2' : '深渊魔神 Phase 3';
       renderer.drawText(bossName, bx + bw / 2, by + 1, {
         color: '#fff', size: 8, align: 'center',
       });
 
       const phaseText = this.boss.phase === 1 ? '' :
-                        this.boss.phase === 2 ? ' 规则变化' : ' 最终疯狂';
+        this.boss.phase === 2 ? ' 规则变化' : ' 最终疯狂';
       if (phaseText) {
         const flash = Math.floor(run.gameTime * 4) % 2 === 0;
         renderer.drawText(phaseText, bx + bw + 5, by + 1, {

@@ -66,13 +66,13 @@ export const ENEMY_TYPES = [
     id: 'skeleton_archer', name: '骷髅弓手',
     color: '#e67e22', hp: 2, speed: 30, size: 10, score: 30,
     minWave: 2, archetype: ARCHETYPE.RANGED, tags: [],
-    shootInterval: 2.5, projectileSpeed: 100,
+    shootInterval: 5.0, projectileSpeed: 100,
   },
   {
     id: 'dark_mage', name: '暗黑法师',
     color: '#9b59b6', hp: 3, speed: 35, size: 10, score: 40,
     minWave: 4, archetype: ARCHETYPE.RANGED, tags: [TAG.DARK],
-    shootInterval: 2.0, projectileSpeed: 130,
+    shootInterval: 4.0, projectileSpeed: 130,
   },
 
   // ── Exploder ─────────────────────────────
@@ -94,7 +94,7 @@ export const ENEMY_TYPES = [
     id: 'necromancer', name: '死灵法师',
     color: '#6c3483', hp: 4, speed: 25, size: 12, score: 60,
     minWave: 5, archetype: ARCHETYPE.SUMMONER, tags: [TAG.DARK],
-    summonInterval: 5, maxMinions: 6, minionHp: 1,
+    summonInterval: 10, maxMinions: 6, minionHp: 1,
   },
 
   // ── Controller ───────────────────────────
@@ -102,7 +102,7 @@ export const ENEMY_TYPES = [
     id: 'frost_mage', name: '冰霜法师',
     color: '#5dade2', hp: 3, speed: 30, size: 10, score: 40,
     minWave: 4, archetype: ARCHETYPE.CONTROLLER, tags: [TAG.ICE],
-    shootInterval: 3.0, projectileSpeed: 90,
+    shootInterval: 6.0, projectileSpeed: 90,
     controlType: 'slow', controlDuration: 2.0,
   },
   {
@@ -134,14 +134,14 @@ export const ENEMY_TYPES = [
   },
 ];
 
-// --- Wave Rules ---
+// --- Wave Rules (LoL invasion style: big waves, fast escalation) ---
 
 export const WAVE_RULES = {
-  baseCount: 4,
-  growth: 1.5,
-  waveInterval: 30,
-  trickleInterval: 2.5,
-  dangerWaveInterval: 5,
+  baseCount: 4,          // smaller waves
+  growth: 1.5,           // slower growth per wave
+  waveInterval: 15,      // waves every 15s
+  trickleInterval: 0.8,  // trickle interval (reference)
+  dangerWaveInterval: 3, // danger waves every 3rd
 
   archetypeSchedule: {
     [ARCHETYPE.MELEE]:     { startWave: 1, weight: 10 },
@@ -179,8 +179,8 @@ export function getAvailableEnemies(waveNum) {
 
 /** Weighted random roll from the full pool (for trickle spawn) */
 export function rollEnemyType(gameTime) {
-  // Approximate wave from gameTime (30s per wave)
-  const waveNum = Math.max(1, Math.floor(gameTime / 30) + 1);
+  // Approximate wave from gameTime (15s per wave now)
+  const waveNum = Math.max(1, Math.floor(gameTime / 15) + 1);
   const pool = getAvailableEnemies(waveNum);
   const totalWeight = pool.length;
   if (totalWeight === 0) return ENEMY_TYPES[0];
@@ -204,7 +204,7 @@ export function rollWaveComposition(waveNum, timeScale = 1) {
   const rules = WAVE_RULES;
   const isDanger = waveNum % rules.dangerWaveInterval === 0;
 
-  // Total enemy count for this wave (scaled by time)
+  // Total enemy count for this wave — much bigger waves
   const totalCount = Math.floor((rules.baseCount + waveNum * rules.growth) * timeScale);
 
   // Build weighted archetype pool for this wave
@@ -214,20 +214,20 @@ export function rollWaveComposition(waveNum, timeScale = 1) {
     if (waveNum >= cfg.startWave) {
       let w = cfg.weight;
       if (isDanger && arch === ARCHETYPE.ELITE) w *= 3;
+      // Danger waves also boost summoner and controller weights
+      if (isDanger && (arch === ARCHETYPE.SUMMONER || arch === ARCHETYPE.CONTROLLER)) w *= 2;
       weightedArchetypes.push({ arch, weight: w });
     }
   }
 
-  // Danger wave: guarantee summoner or support
+  // Danger wave: guarantee summoner + support
   const guaranteed = [];
-  if (isDanger && waveNum >= 5) {
-    const ga = Math.random() < 0.5 ? ARCHETYPE.SUMMONER : ARCHETYPE.SUPPORT;
-    guaranteed.push(ga);
+  if (isDanger && waveNum >= 3) {
+    guaranteed.push(ARCHETYPE.SUMMONER);
+    guaranteed.push(ARCHETYPE.CHARGER);
   }
-  // Always have at least 1 melee
-  if (!guaranteed.includes(ARCHETYPE.MELEE)) {
-    guaranteed.push(ARCHETYPE.MELEE);
-  }
+  // Always have at least 1 melee for basic feel
+  guaranteed.push(ARCHETYPE.MELEE);
 
   // Assign archetypes to each slot
   const slots = [...guaranteed];

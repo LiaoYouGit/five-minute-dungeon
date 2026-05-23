@@ -24,6 +24,12 @@ export const SKILL_POOL = [
   { id: 'max_hp',  name: '生命+1',  desc: '最大生命值+1',            type: 'instant', maxStack: 5,  icon: '♡' },
   { id: 'shield',  name: '护盾',    desc: '受伤时有概率抵挡1点伤害', type: 'stat',    maxStack: 3,  icon: '◆' },
 
+  // --- New stat cards ---
+  { id: 'hp_up',         name: '生命值+20',  desc: '最大生命值上限+20，并恢复满',  type: 'instant', maxStack: 5,  icon: '💖' },
+  { id: 'move_spd_up',   name: '疾风步',     desc: '移动速度+25%，更灵活走位',     type: 'stat',    maxStack: 3,  icon: '👟' },
+  { id: 'atk_spd_card',  name: '急速射击',   desc: '攻速+30%，攻击更加密集',       type: 'stat',    maxStack: 3,  icon: '🎯' },
+  { id: 'base_stats_up', name: '全属性提升',  desc: '攻击+10%、攻速+10%、移速+10%', type: 'stat',    maxStack: 5,  icon: '👑' },
+
   // --- Speed ---
   { id: 'spd_up',  name: '移速+15%', desc: '玩家移动速度提升', type: 'stat', maxStack: 5, icon: '↑' },
 

@@ -59,7 +59,6 @@ export class SkillManager {
         skillId: skill.id,
         bond: bond,
       });
-      console.log(`羁绊激活：${bond.desc}`);
     }
   }
 
@@ -148,6 +147,17 @@ export class SkillManager {
           break;
         case 'thorns':
           buffs.thorns += 1;
+          break;
+        case 'move_spd_up':
+          buffs.playerSpeedMult *= 1.25;
+          break;
+        case 'atk_spd_card':
+          buffs.intervalMult *= 0.7;
+          break;
+        case 'base_stats_up':
+          buffs.damageMult *= 1.1;
+          buffs.intervalMult *= 0.9;
+          buffs.playerSpeedMult *= 1.1;
           break;
       }
     }

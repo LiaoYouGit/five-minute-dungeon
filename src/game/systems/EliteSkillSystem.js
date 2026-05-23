@@ -6,6 +6,11 @@ export class EliteSkillSystem {
     this.LW = LW;
     this.LH = LH;
     this.onSpawnProjectile = onSpawnProjectile;
+    this.maxAttackRange = 500;
+  }
+
+  setMaxAttackRange(range) {
+    this.maxAttackRange = range;
   }
 
   update(dt, gameTime) {
@@ -17,13 +22,32 @@ export class EliteSkillSystem {
       const hp = e.components.Health;
       const elite = e.components.EliteTag;
 
-      // Vampire: Bat Swarm (CD: 8s)
+      // Vampire: Bat Swarm (CD: 8s, cast: 0.5s)
       if (elite.type === 'vampire') {
         if (!elite.batSwarmCD) elite.batSwarmCD = 0;
-        elite.batSwarmCD -= dt;
-        if (elite.batSwarmCD <= 0) {
-          this._vampireBatSwarm(e, et);
-          elite.batSwarmCD = 8.0;
+
+        // Casting phase
+        if (elite.batSwarmCasting) {
+          elite.batSwarmCastTimer -= dt;
+          if (elite.batSwarmCastTimer <= 0) {
+            elite.batSwarmCasting = false;
+            this._vampireBatSwarm(e, et);
+            elite.batSwarmCD = 16.0;
+          }
+        } else {
+          elite.batSwarmCD -= dt;
+          if (elite.batSwarmCD <= 0) {
+            const players = this.world.query('Transform', 'PlayerTag');
+            if (players.length > 0) {
+              const pt = players[0].components.Transform;
+              if (MathUtils.distance(et, pt) <= this.maxAttackRange) {
+                elite.batSwarmCasting = true;
+                elite.batSwarmCastTimer = 1.0;
+              } else {
+                elite.batSwarmCD = 1.0;
+              }
+            }
+          }
         }
       }
 
@@ -52,6 +76,7 @@ export class EliteSkillSystem {
     // Update phase shift timer (remove when expired)
     const phased = this.world.query('PhaseShift');
     for (const e of phased) {
+      if (!e.active || !e.components.PhaseShift) continue;
       const phase = e.components.PhaseShift;
       phase.timer -= dt;
       if (phase.timer <= 0) {
@@ -63,7 +88,6 @@ export class EliteSkillSystem {
   // ── Vampire Skills ──────────────────────────────────────────
 
   _vampireBatSwarm(e, et) {
-    // Spawn 3-4 bats that fly outward in a circle
     const count = 3 + Math.floor(Math.random() * 2);
     const players = this.world.query('Transform', 'PlayerTag');
     if (players.length === 0) return;

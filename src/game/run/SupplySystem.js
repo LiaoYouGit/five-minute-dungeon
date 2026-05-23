@@ -1,5 +1,6 @@
 import { MathUtils } from '../../engine/MathUtils.js';
 import { MiniBossController } from '../boss/MiniBossController.js';
+import { PoisonCircleSystem } from '../systems/PoisonCircleSystem.js';
 
 const TYPE_META = {
   heal:     { color: '#2ecc71', idleColor: '#1a4a3a', label: '治疗援助',   icon: '🩹', warningDuration: 30, activeDuration: 25, cycleDuration: 90 },
@@ -14,6 +15,10 @@ export class SupplySystem {
     this.deps = deps;  // { expSystem, particles, camera, audio, dmgNumbers, enemySpawnSystem, LW, LH }
     this.miniBosses = [];
     this.miniBossSpawned = false; // Track if 4-minute mini boss spawned
+    this.miniBossPoisonCircle = new PoisonCircleSystem();
+    this._miniBossArena = null;
+    this._miniBossPoisonTriggered = false;
+    this._timedMiniBoss = null;
     this.points = supplyPoints.map((sp, idx) => ({
       ...sp,
       meta: TYPE_META[sp.type],
@@ -38,7 +43,7 @@ export class SupplySystem {
 
   // Spawn mini boss at specific position (called when gameTime >= 240)
   spawnMiniBossAt(x, y) {
-    const hp = 400 + Math.floor((this.deps.gameTime || 240) / 60) * 100; // Adjusted for player 100HP baseline
+    const hp = 800 + Math.floor((this.deps.gameTime || 150) / 60) * 200;
     const mb = new MiniBossController(this.world, this.deps.LW, this.deps.LH);
     mb.spawn(x, y, hp, (dx, dy) => {
       // 大量经验奖励（150 EXP）
@@ -62,9 +67,51 @@ export class SupplySystem {
       if (this.deps.dmgNumbers) this.deps.dmgNumbers.add(dx, dy - 20, '+150 EXP', { color: '#ffd700', size: 18 });
     });
     this.miniBosses.push(mb);
+    this._timedMiniBoss = mb;
     this.miniBossSpawned = true;
     if (this.deps.camera) this.deps.camera.shake(6, 0.5);
     if (this.deps.audio) this.deps.audio.play('levelup');
+  }
+
+  isTimedMiniBossActive() {
+    return this._timedMiniBoss && this._timedMiniBoss.active;
+  }
+
+  getMiniBossCountdown() {
+    if (this.miniBossSpawned) return null;
+    const gameTime = this.deps.gameTime || 0;
+    if (this._miniBossPoisonTriggered) {
+      if (this.miniBossPoisonCircle.state === 'shrinking') {
+        return {
+          phase: 'shrinking',
+          timeLeft: Math.ceil(this.miniBossPoisonCircle.shrinkDuration - this.miniBossPoisonCircle.shrinkTimer),
+        };
+      }
+      return { phase: 'spawning' };
+    }
+    if (gameTime >= 60) {
+      return { phase: 'warning', timeLeft: Math.ceil(90 - gameTime) };
+    }
+    return null;
+  }
+
+  _triggerMiniBossPoison() {
+    const rooms = this.deps.rooms;
+    const tileMap = this.deps.tileMap;
+    if (!rooms || rooms.length === 0 || !tileMap) return;
+
+    const eligible = rooms.filter(r => !r.isSpawn && !r.isBoss);
+    const room = eligible.length > 0
+      ? eligible[Math.floor(Math.random() * eligible.length)]
+      : rooms[0];
+    const ts = tileMap.tileSize;
+    const cx = room.cx * ts + ts / 2;
+    const cy = room.cy * ts + ts / 2;
+    const radius = Math.min(room.w, room.h) * ts * 0.4;
+    const maxR = Math.max(this.deps.LW, this.deps.LH) * 2;
+    this.miniBossPoisonCircle.trigger(cx, cy, radius, maxR);
+    this._miniBossArena = { cx, cy, radius };
+    this._miniBossPoisonTriggered = true;
   }
 
   update(dt, player) {
@@ -72,13 +119,20 @@ export class SupplySystem {
     const pt = player.components.Transform;
     const ph = player.components.Health;
 
-    // Check for 4-minute mini boss spawn
+    // Mini-boss poison circle: trigger at gameTime 90 (1.5 min), spawns at ~150
     const gameTime = this.deps.gameTime || 0;
-    if (gameTime >= 240 && !this.miniBossSpawned && this.deps.LW && this.deps.LH) {
-      // Spawn mini boss near player
-      const spawnX = MathUtils.clamp(pt.x + (Math.random() - 0.5) * 100, 50, this.deps.LW - 50);
-      const spawnY = MathUtils.clamp(pt.y + (Math.random() - 0.5) * 100, 50, this.deps.LH - 50);
-      this.spawnMiniBossAt(spawnX, spawnY);
+    if (gameTime >= 90 && !this._miniBossPoisonTriggered && !this.miniBossSpawned) {
+      this._triggerMiniBossPoison();
+    }
+
+    // Spawn mini-boss when poison circle finishes shrinking
+    if (this._miniBossPoisonTriggered && !this.miniBossSpawned && this.miniBossPoisonCircle.state === 'stable') {
+      this.spawnMiniBossAt(this._miniBossArena.cx, this._miniBossArena.cy);
+    }
+
+    // Update mini-boss poison circle
+    if (this.miniBossPoisonCircle.isActive()) {
+      this.miniBossPoisonCircle.update(dt, player);
     }
 
     // update mini bosses
@@ -93,8 +147,15 @@ export class SupplySystem {
       switch (p.state) {
         case 'idle':
           if (p.timer <= 0) {
-            p.state = 'warning';
-            p.timer = p.meta.warningDuration;
+            // Only allow transition if fewer than 2 points are warning/active
+            const activeCount = this.points.filter(pp => pp.state === 'warning' || pp.state === 'active').length;
+            if (activeCount < 2) {
+              p.state = 'warning';
+              p.timer = p.meta.warningDuration;
+            } else {
+              // Wait and retry in 5 seconds
+              p.timer = 5 + Math.random() * 5;
+            }
           }
           break;
         case 'warning':
@@ -129,7 +190,7 @@ export class SupplySystem {
     if (this.deps.camera) this.deps.camera.shake(3, 0.3);
 
     if (p.type === 'miniboss') {
-      const hp = 150 + Math.floor((this.deps.gameTime || 0) / 30) * 40; // Adjusted for player 100HP baseline
+      const hp = 300 + Math.floor((this.deps.gameTime || 0) / 30) * 50;
       const mb = new MiniBossController(this.world, this.deps.LW, this.deps.LH);
       mb.spawn(p.x, p.y, hp, (dx, dy) => {
         // 大量经验奖励（96 EXP）

@@ -86,16 +86,30 @@ export class Renderer {
   }
 
   drawSprite(image, x, y, { frameWidth, frameHeight, frame = 0, scale = 1 } = {}) {
-    if (!image) return;
+    if (!image) {
+      console.warn('[Renderer] drawSprite called with null image');
+      return;
+    }
     const { ctx } = this;
-    const sx = frame * (frameWidth || image.width);
-    const sy = 0;
+
+    // Calculate source and destination dimensions
     const sw = frameWidth || image.width;
     const sh = frameHeight || image.height;
+    const sx = frame * sw;
+    const sy = 0;
+
     const dw = sw * scale;
     const dh = sh * scale;
+
+    // DEBUG: Log EVERY drawSprite call EXCEPT floor tiles
+    const filename = image.src.split('/').pop();
+
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(image, sx, sy, sw, sh, Math.floor(x - dw / 2), Math.floor(y - dh / 2), dw, dh);
+
+    // CRITICAL DEBUG: Check if drawImage actually executes
+    const drawX = Math.floor(x - dw / 2);
+    const drawY = Math.floor(y - dh / 2);
+    ctx.drawImage(image, sx, sy, sw, sh, drawX, drawY, dw, dh);
   }
 
   setAlpha(a) {

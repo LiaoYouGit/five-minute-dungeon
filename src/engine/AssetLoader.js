@@ -2,6 +2,7 @@ export class AssetLoader {
   constructor() {
     this.images = {};
     this.loaded = false;
+    this.loadErrors = [];
   }
 
   loadAll() {
@@ -31,6 +32,8 @@ export class AssetLoader {
       boss_phase2: 'assets/boss/boss_phase2.png',
       boss_phase3: 'assets/boss/boss_phase3.png',
       mini_boss: 'assets/boss/mini_boss.png',
+      abyss_eye: 'assets/boss/boss_phase1.png',
+      abyss_giant_eye: 'assets/boss/boss_phase3.png',
       // Tiles
       floor_a: 'assets/tiles/floor_a.png',
       floor_b: 'assets/tiles/floor_b.png',
@@ -50,6 +53,8 @@ export class AssetLoader {
       enemy_projectile: 'assets/projectiles/enemy_projectile.png',
       enemy_projectile_ice: 'assets/projectiles/enemy_projectile_ice.png',
       frost_mage_projectile: 'assets/projectiles/frost_mage_projectile.png',
+      chain_projectile: 'assets/projectiles/boss_bullet.png',
+      elite_projectile: 'assets/projectiles/enemy_projectile.png',
       // Pickups
       coin: 'assets/pickups/coin.png',
       health_potion: 'assets/pickups/health_potion.png',
@@ -66,7 +71,9 @@ export class AssetLoader {
     };
 
     const entries = Object.entries(defs);
+
     let remaining = entries.length;
+    let failedLoads = [];
 
     return new Promise((resolve) => {
       for (const [key, src] of entries) {
@@ -77,11 +84,15 @@ export class AssetLoader {
           remaining--;
           if (remaining === 0) {
             this.loaded = true;
+            if (failedLoads.length > 0) {
+              this.loadErrors = failedLoads;
+            }
             resolve();
           }
         };
         img.onerror = () => {
-          console.warn(`Asset failed to load: ${src}`);
+          failedLoads.push(key);
+          this.loadErrors.push(key);
           remaining--;
           if (remaining === 0) {
             this.loaded = true;
@@ -93,6 +104,19 @@ export class AssetLoader {
   }
 
   get(key) {
-    return this.images[key] || null;
+    const img = this.images[key];
+    if (!img) {
+      console.warn('[AssetLoader] ⚠️ Image not found for key:', key);
+      return null;
+    }
+    return img;
+  }
+
+  isLoaded() {
+    return this.loaded;
+  }
+
+  getLoadErrors() {
+    return this.loadErrors;
   }
 }

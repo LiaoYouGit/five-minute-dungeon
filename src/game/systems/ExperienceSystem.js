@@ -5,7 +5,7 @@ export class ExperienceSystem {
     this.world = world;
     this.totalExp = 0;
     this.level = 1;
-    this.expToNext = 10;
+    this.expToNext = 12;
     this.onLevelUp = null;
   }
 
@@ -14,7 +14,7 @@ export class ExperienceSystem {
     while (this.totalExp >= this.expToNext) {
       this.totalExp -= this.expToNext;
       this.level++;
-      this.expToNext = Math.floor(10 * this.level * 1.2);
+      this.expToNext = Math.floor(10 * Math.pow(1.22, this.level));
       if (this.onLevelUp) this.onLevelUp(this.level);
     }
   }
@@ -67,6 +67,6 @@ export class ExperienceSystem {
   reset() {
     this.totalExp = 0;
     this.level = 1;
-    this.expToNext = 10;
+    this.expToNext = 12;
   }
 }

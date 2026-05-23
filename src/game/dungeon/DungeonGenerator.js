@@ -88,6 +88,9 @@ export class DungeonGenerator {
       }
     }
 
+    // Generate enemy spawn points at room edges
+    const enemySpawnPoints = this._generateSpawnPoints(map, rooms);
+
     // Pick 4 supply points from non-spawn, non-boss rooms
     const supplyTypes = ['heal', 'bomb', 'mission', 'miniboss'];
     const candidates = rooms.filter(r => !r.isSpawn && !r.isBoss);
@@ -111,7 +114,40 @@ export class DungeonGenerator {
       });
     }
 
-    return { map, rooms, supplyPoints };
+    return { map, rooms, supplyPoints, enemySpawnPoints };
+  }
+
+  /** Generate exactly 4 enemy spawn points, one in each corner of non-spawn rooms */
+  _generateSpawnPoints(map, rooms) {
+    const ts = map.tileSize;
+    const spawnPoints = [];
+
+    // Collect all non-spawn rooms
+    const eligibleRooms = rooms.filter(r => !r.isSpawn);
+    if (eligibleRooms.length === 0) return spawnPoints;
+
+    // Pick 4 different rooms (repeat if not enough rooms)
+    const pickedRooms = [];
+    for (let i = 0; i < 4; i++) {
+      pickedRooms.push(eligibleRooms[i % eligibleRooms.length]);
+    }
+
+    for (const room of pickedRooms) {
+      // Place spawn point in a random corner of the room
+      const corners = [
+        { tx: room.x + 2, ty: room.y + 2 },           // top-left
+        { tx: room.x + room.w - 3, ty: room.y + 2 },  // top-right
+        { tx: room.x + 2, ty: room.y + room.h - 3 },  // bottom-left
+        { tx: room.x + room.w - 3, ty: room.y + room.h - 3 }, // bottom-right
+      ];
+      const corner = corners[Math.floor(Math.random() * corners.length)];
+      spawnPoints.push({
+        x: corner.tx * ts + ts / 2,
+        y: corner.ty * ts + ts / 2,
+      });
+    }
+
+    return spawnPoints;
   }
 
   _carveCorridor(map, x1, y1, x2, y2) {

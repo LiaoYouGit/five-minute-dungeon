@@ -1,5 +1,5 @@
-export const STAGE_DURATION = 120; // 2 minutes per stage
-export const TOTAL_DURATION = 480; // 8 minutes total
+export const STAGE_DURATION = 75; // 75 seconds per stage
+export const TOTAL_DURATION = 300; // 5 minutes total
 export const STAGE_COUNT = 4;
 
 export class RunState {
@@ -44,11 +44,11 @@ export class RunState {
 
   // Stage-based multipliers for difficulty scaling
   getStageHpMult() {
-    return 1 + (this.currentStage - 1) * 0.5; // Stage 1: 1x, Stage 2: 1.5x, Stage 3: 2x, Stage 4: 2.5x
+    return 1 + (this.currentStage - 1) * 1.5; // Stage 1: 1x, Stage 2: 2.5x, Stage 3: 4x, Stage 4: 5.5x
   }
 
   getStageCountMult() {
-    return 1 + (this.currentStage - 1) * 0.3; // Stage 1: 1x, Stage 2: 1.3x, Stage 3: 1.6x, Stage 4: 1.9x
+    return 1 + (this.currentStage - 1) * 0.2; // Stage 1: 1x, Stage 2: 1.2x, Stage 3: 1.4x, Stage 4: 1.6x
   }
 
   // Can elites spawn? (after first minute)

@@ -37,7 +37,13 @@ const characterSelectionScene = new CharacterSelectionScene(renderer, audio, (ch
   if (characterId) {
     // 确认角色，开始加载游戏
     audio.init();
-    _loading = { mode: _selectedMode, characterId, progress: 0, phase: 0, timer: 0 };
+    // Check if assets are loaded before starting
+    if (!assetsLoaded) {
+      console.warn('[Game] Assets not loaded yet! Waiting for assets...');
+      _loading = { mode: _selectedMode, characterId, progress: 0, phase: 0, timer: 0, waitingForAssets: true };
+    } else {
+      _loading = { mode: _selectedMode, characterId, progress: 0, phase: 0, timer: 0 };
+    }
   } else {
     // 返回菜单
     scenes.pop();
@@ -46,16 +52,25 @@ const characterSelectionScene = new CharacterSelectionScene(renderer, audio, (ch
 scenes.register('characterSelection', characterSelectionScene);
 
 // --- Game ---
-const gameScene = new GameScene(renderer, input, audio, particles, assets,
-  (level, choices, onSelect) => {
-    scenes.push('levelup', { level, choices, onSelect, skillMgr: gameScene.skillMgr, onPop: () => scenes.pop() });
-  },
-  (run) => {
-    input.setEnabled(false);
-    scenes.switchTo('result', { run });
-  }
-);
-scenes.register('game', gameScene);
+// Wait for assets to load before creating game scene
+let gameScene = null;
+let assetsLoaded = false;
+
+assets.loadAll().then(() => {
+  assetsLoaded = true;
+  gameScene = new GameScene(renderer, input, audio, particles, assets,
+    (level, choices, onSelect) => {
+      scenes.push('levelup', { level, choices, onSelect, skillMgr: gameScene.skillMgr, onPop: () => scenes.pop() });
+    },
+    (run) => {
+      input.setEnabled(false);
+      scenes.switchTo('result', { run });
+    }
+  );
+  scenes.register('game', gameScene);
+}).catch(err => {
+  console.error('[Assets] ❌ CRITICAL: Failed to load:', err);
+});
 
 // --- Level Up ---
 const levelUpScene = new LevelUpScene(renderer, audio);
@@ -166,11 +181,24 @@ const gameLoop = new GameLoop({
 
     if (_loading) {
       _loading.timer += dt;
+
+      // If waiting for assets, check if loaded
+      if (_loading.waitingForAssets && !assetsLoaded) {
+        // Still loading assets, show progress
+        _loading.progress = Math.min(0.9, _loading.timer * 0.3);
+        return; // Don't proceed until assets loaded
+      }
+
+      // Assets loaded, proceed with game start
+      if (_loading.waitingForAssets && assetsLoaded) {
+        _loading.waitingForAssets = false;
+      }
+
       if (_loading.phase === 0 && _loading.timer > 0.3) {
         _loading.phase = 1;
         _loading.progress = 0.3;
       }
-      if (_loading.phase === 1 && _loading.timer > 0.5) {
+      if (_loading.phase === 1 && _loading.timer > 0.5 && assetsLoaded) {
         input.setEnabled(true);
         scenes.push('game', { mode: _loading.mode, characterId: _loading.characterId });
         _loading.phase = 2;
@@ -213,8 +241,13 @@ function renderLoading() {
   renderer.applyTransform();
   renderer.drawRect(0, 0, LW, LH, '#0d0d1a');
 
-  const steps = ['正在生成地牢...', '正在创建实体...', '准备就绪'];
-  const stepIndex = Math.min(_loading.phase, steps.length - 1);
+  const steps = ['正在加载资源...', '正在生成地牢...', '正在创建实体...', '准备就绪'];
+  let stepIndex = Math.min(_loading.phase, steps.length - 1);
+
+  // If waiting for assets, show asset loading step
+  if (_loading.waitingForAssets) {
+    stepIndex = 0;
+  }
 
   renderer.drawText('LOADING', LW / 2, LH * 0.38, {
     color: '#4ecdc4', size: 18, align: 'center', font: 'monospace',
@@ -248,7 +281,4 @@ function renderLoading() {
 
 gameLoop.start();
 
-// Load assets in background, then enable menu
-assets.loadAll().then(() => {
-  console.log(`Assets loaded: ${Object.keys(assets.images).length}`);
-});
+// Assets are loaded in background (line 53-68)

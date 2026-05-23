@@ -72,7 +72,7 @@ export class MenuScene {
     renderer.drawText('快速游戏', startX + btnW / 2, btnY1 + 8, {
       color: '#4ecdc4', size: 13, align: 'center', font: 'monospace',
     });
-    renderer.drawText('8分钟限时', startX + btnW / 2, btnY1 + 24, {
+    renderer.drawText('5分钟限时', startX + btnW / 2, btnY1 + 24, {
       color: '#4ecdc480', size: 8, align: 'center', font: 'monospace',
     });
 
