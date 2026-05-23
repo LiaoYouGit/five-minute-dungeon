@@ -800,7 +800,7 @@ export class GameScene {
           const bossRoom = this.rooms.find(r => r.isBoss) || this.rooms[this.rooms.length - 1];
           const bx = bossRoom.cx * this.tileMap.tileSize + this.tileMap.tileSize / 2;
           const by = bossRoom.cy * this.tileMap.tileSize + this.tileMap.tileSize / 2;
-          const bossHp = 1500; // Adjusted for player 100HP baseline (medium difficulty)
+          const bossHp = 120; // Medium difficulty (5-6 minute fight with 100-150 HP baseline)
           this.boss.spawn(bx, by, bossHp);
           this.camera.shake(10, 1.0);
 

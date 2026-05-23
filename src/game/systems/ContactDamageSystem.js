@@ -69,6 +69,12 @@ export class ContactDamageSystem {
           if (dist < hz.radius && ph.invTimer <= 0) {
             ph.hp -= hz.damage;
             ph.invTimer = 0.5;
+
+            // Apply slow effect if defined
+            if (hz.slowAmount && player.components.PlayerSpeed) {
+              player.components.PlayerSpeed.value *= (1 - hz.slowAmount);
+            }
+
             if (this.onPlayerHit) this.onPlayerHit(player, h);
           }
         }

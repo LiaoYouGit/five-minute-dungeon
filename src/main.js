@@ -22,6 +22,7 @@ const scenes = new SceneManager();
 input.bind(canvas);
 
 // --- Menu ---
+let _loading = null;
 let _selectedMode = null;
 
 const menuScene = new MenuScene(renderer, audio, (mode) => {
