@@ -34,6 +34,9 @@ export class ResultScene {
     if (isEndless) {
       title = 'GAME OVER';
       titleColor = '#ff4444';
+    } else if (run.bossDefeated) {
+      title = 'VICTORY!';
+      titleColor = '#ffd700';
     } else {
       title = run.survived ? 'TIME UP!' : 'GAME OVER';
       titleColor = run.survived ? '#4ecdc4' : '#ff4444';

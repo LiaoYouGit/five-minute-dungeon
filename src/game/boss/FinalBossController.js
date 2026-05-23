@@ -61,6 +61,21 @@ export class FinalBossController {
 
   isPhaseTransitioning() { return this.phaseTransitioning; }
 
+  // ── Boss狂暴机制 ──────────────────────────────────────────
+
+  _isFrenzy() {
+    return this.deps.gameTime >= 720; // 12分钟后进入狂暴
+  }
+
+  _getFrenzyParams() {
+    if (!this._isFrenzy()) return { attackMult: 1, cooldownMult: 1, speedMult: 1 };
+    return {
+      attackMult: 0.7,    // 攻击间隔×0.7
+      cooldownMult: 0.6,  // 技能冷却×0.6
+      speedMult: 1.3,     // 移速+30%
+    };
+  }
+
   spawn(x, y, maxHp = 120, onDeath = null) {
     this.entity = this.world.createEntity();
     this.world.addComponent(this.entity, 'Transform', { x, y });
@@ -73,7 +88,7 @@ export class FinalBossController {
     this.world.addComponent(this.entity, 'Health', { hp: maxHp, maxHp });
     this.world.addComponent(this.entity, 'EnemyTag', {});
     this.world.addComponent(this.entity, 'BossTag', {});
-    this.world.addComponent(this.entity, 'Damage', { value: 10 }); // Adjusted for player 100HP baseline (10% damage)
+    this.world.addComponent(this.entity, 'Damage', { value: 100 });
     this.world.addComponent(this.entity, 'Speed', { value: PHASE_CONFIG[1].moveSpeed });
     this.world.addComponent(this.entity, 'ScoreValue', { value: 1000 });
     this.world.addComponent(this.entity, 'Collider', { radius: 16 });
@@ -159,10 +174,11 @@ export class FinalBossController {
       return;
     }
 
-    // Tick cooldowns
+    // Tick cooldowns (frenzy: cooldown ticks faster)
+    const frenzy = this._getFrenzyParams();
     for (const key of Object.keys(this.skillCooldowns)) {
       if (this.skillCooldowns[key] > 0) {
-        this.skillCooldowns[key] -= dt;
+        this.skillCooldowns[key] -= dt / frenzy.cooldownMult;
       }
     }
 
@@ -170,13 +186,13 @@ export class FinalBossController {
     if (this.activeSkillState) {
       this._updateActiveSkill(dt);
     } else {
-      // Movement
-      this._updateMovement(dt);
+      // Movement (frenzy: speed boost)
+      this._updateMovement(dt, frenzy.speedMult);
 
-      // Attack timer
+      // Attack timer (frenzy: attack faster)
       this.attackTimer -= dt;
       if (this.attackTimer <= 0) {
-        this.attackTimer = PHASE_CONFIG[this.phase].attackCooldown;
+        this.attackTimer = PHASE_CONFIG[this.phase].attackCooldown * frenzy.attackMult;
         this._chooseAndExecuteSkill();
       }
     }
@@ -347,13 +363,13 @@ export class FinalBossController {
     }
   }
 
-  _updateMovement(dt) {
+  _updateMovement(dt, speedMult = 1) {
     const players = this.world.query('Transform', 'PlayerTag');
     if (players.length === 0) return;
 
     const pt = players[0].components.Transform;
     const bt = this.entity.components.Transform;
-    const speed = this.entity.components.Speed.value;
+    const speed = this.entity.components.Speed.value * speedMult;
 
     const dist = MathUtils.distance(bt, pt);
 
@@ -491,7 +507,7 @@ export class FinalBossController {
     const angle = MathUtils.angleBetween(bt, pt);
     const arc = MathUtils.toRad(120);
     const range = 100;
-    const damage = 15; // 15% of player 100HP
+    const damage = 150;
     const warningDuration = 1.2;
 
     // Add warning
@@ -556,7 +572,7 @@ export class FinalBossController {
     const radius = 30;
     const delay = 1.5;
     const duration = 2.0;
-    const damage = 1;
+    const damage = 10;
 
     // Spawn HazardZones near player
     for (let i = 0; i < count; i++) {
@@ -659,7 +675,7 @@ export class FinalBossController {
     const radius = 150;
     const slowAmount = 0.5;
     const duration = 5.0;
-    const damage = 3; // Per tick, 3% of player 100HP
+    const damage = 30;
     const warningDuration = 2.0;
 
     this.warningData.push({
@@ -735,7 +751,7 @@ export class FinalBossController {
     const count = 3;
     const maxDist = 200;
     const rootDuration = 1.5;
-    const damage = 1;
+    const damage = 10;
     const warningDuration = 0.8;
 
     for (let i = 0; i < count; i++) {
@@ -820,7 +836,7 @@ export class FinalBossController {
     const maxRadius = 300;
     const expansionSpeed = 80;
     const safeZoneRadius = 50;
-    const damage = 25; // 25% of player 100HP
+    const damage = 250;
     const warningDuration = 3.0;
 
     // Find safe zone position
@@ -859,7 +875,7 @@ export class FinalBossController {
     const beamCount = 4;
     const rotationSpeed = Math.PI / 2; // 90° per second
     const duration = 4.0;
-    const damage = 5; // Per tick, 5% of player 100HP
+    const damage = 50;
     const warningDuration = 1.5;
 
     this.warningData.push({
@@ -894,7 +910,7 @@ export class FinalBossController {
     const gazeAngle = MathUtils.toRad(60);
     const gazeRange = 200;
     const slowAmount = 0.7;
-    const damagePerSecond = 3; // 3% per second of player 100HP
+    const damagePerSecond = 30;
     const duration = 8.0;
     const openingDuration = 1.0;
 
@@ -960,7 +976,7 @@ export class FinalBossController {
   _finalStrike(bt, pt) {
     const chainCount = 3;
     const dashSpeed = 400;
-    const damage = 40; // Fixed damage, 40% of player 100HP
+    const damage = 400;
     const warningDuration = 2.0;
 
     // Charge warning lines (similar to MiniBossController)
@@ -1512,7 +1528,7 @@ export class FinalBossController {
   }
 
   // Helper: fire projectile
-  _fireProjectile(x, y, angle, speed, color = '#e74c3c', imageKey = 'boss_bullet', damage = 5) {
+  _fireProjectile(x, y, angle, speed, color = '#e74c3c', imageKey = 'boss_bullet', damage = 50) {
     const p = this.world.createEntity();
     this.world.addComponent(p, 'Transform', { x, y });
     this.world.addComponent(p, 'Velocity', {

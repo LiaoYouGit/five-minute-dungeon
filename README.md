@@ -1,2 +1,2 @@
-# five-minute-dungeon
-五分钟地牢
+# twelve-minute-dungeon
+12分钟地牢

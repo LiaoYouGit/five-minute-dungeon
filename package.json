@@ -1,7 +1,7 @@
 {
   "name": "dungeon-rush",
   "version": "0.1.0",
-  "description": "5-Minute Dungeon Rush - Roguelike survival game",
+  "description": "12-Minute Dungeon Rush - Roguelike survival game",
   "private": true,
   "scripts": {
     "dev": "npx vite --host",

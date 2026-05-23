@@ -1,5 +1,5 @@
-export const STAGE_DURATION = 75; // 75 seconds per stage
-export const TOTAL_DURATION = 300; // 5 minutes total
+export const STAGE_DURATION = 180; // 180 seconds per stage (12 min / 4 stages)
+export const TOTAL_DURATION = 720; // 12 minutes total
 export const STAGE_COUNT = 4;
 
 export class RunState {
@@ -56,9 +56,9 @@ export class RunState {
     return this.gameTime >= 60;
   }
 
-  // Should mini boss spawn? (at 4 minutes)
+  // Should mini boss spawn? (at ~9 minutes)
   shouldSpawnMiniBoss() {
-    return this.gameTime >= 240 && !this.miniBossSpawned;
+    return this.gameTime >= 540 && !this.miniBossSpawned;
   }
 
   addKill(score) {

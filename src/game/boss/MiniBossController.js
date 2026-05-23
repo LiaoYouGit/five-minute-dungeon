@@ -8,10 +8,11 @@ const SKILLS = {
 };
 
 export class MiniBossController {
-  constructor(world, LW, LH) {
+  constructor(world, LW, LH, maxAttackRange) {
     this.world = world;
     this.LW = LW;
     this.LH = LH;
+    this.maxAttackRange = maxAttackRange || 180;
     this.entity = null;
     this.hp = 0;
     this.maxHp = 0;
@@ -43,7 +44,7 @@ export class MiniBossController {
     this.world.addComponent(this.entity, 'Sprite', { w: 32, h: 32, color: '#9b59b6', imageKey: 'mini_boss' });
     this.world.addComponent(this.entity, 'Health', { hp: maxHp, maxHp });
     this.world.addComponent(this.entity, 'EnemyTag', {});
-    this.world.addComponent(this.entity, 'Damage', { value: 1 });
+    this.world.addComponent(this.entity, 'Damage', { value: 10 });
     this.world.addComponent(this.entity, 'Speed', { value: 50 });
     this.world.addComponent(this.entity, 'ScoreValue', { value: 200 });
     this.world.addComponent(this.entity, 'Collider', { radius: 16 });
@@ -176,7 +177,7 @@ export class MiniBossController {
       targetY,
       chainCount: 3,
       timer: 0.5, // 0.5s marking phase
-      damage: 30, // Fixed damage for player 100HP baseline
+      damage: 300,
     };
 
     this.skillCooldowns.charge = SKILLS.CHARGE.cooldown;
@@ -245,7 +246,7 @@ export class MiniBossController {
   _earthquake() {
     const bt = this.entity.components.Transform;
     const radius = 80;
-    const damage = 2;
+    const damage = 20;
 
     // Damage all enemies in radius (actually damage player)
     const players = this.world.query('Transform', 'Health', 'PlayerTag');
@@ -298,7 +299,7 @@ export class MiniBossController {
     const pt = players[0].components.Transform;
     const bt = this.entity.components.Transform;
 
-    if (MathUtils.distance(bt, pt) > 500) return;
+    if (MathUtils.distance(bt, pt) > this.maxAttackRange) return;
 
     const angle = MathUtils.angleBetween(bt, pt);
     this._casting = { skill: 'normal', timer: 0.6, maxTimer: 0.6, angle, targetX: pt.x, targetY: pt.y };
@@ -330,7 +331,7 @@ export class MiniBossController {
         this.world.addComponent(p, 'Velocity', { x: Math.cos(cast.angle) * 120, y: Math.sin(cast.angle) * 120 });
         this.world.addComponent(p, 'Sprite', { w: 6, h: 6, color: '#bb66ff', imageKey: 'mini_boss_bullet' });
         this.world.addComponent(p, 'ProjectileTag', {});
-        this.world.addComponent(p, 'Damage', { value: 5 });
+        this.world.addComponent(p, 'Damage', { value: 50 });
         this.world.addComponent(p, 'Lifetime', { remaining: 3.0 });
         this.skillCooldowns.normal = 4.0;
       } else if (cast.skill === 'fire') {
@@ -342,7 +343,7 @@ export class MiniBossController {
             x: MathUtils.clamp(bt.x + Math.cos(a) * dist, 20, this.LW - 20),
             y: MathUtils.clamp(bt.y + Math.sin(a) * dist, 20, this.LH - 20),
             radius: 25,
-            damage: 3,
+            damage: 30,
             duration: 3.0,
             timer: 3.0,
           };

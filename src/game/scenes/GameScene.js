@@ -22,6 +22,7 @@ import { SupplySystem } from '../run/SupplySystem.js';
 import { WEAPONS } from '../data/weapons.js';
 import { getCharacterById } from '../data/characters.js';
 import { PoisonCircleSystem } from '../systems/PoisonCircleSystem.js';
+import { DirectorSystem } from '../systems/DirectorSystem.js';
 
 export class GameScene {
   constructor(renderer, input, audio, particles, assets, onLevelUp, onGameOver) {
@@ -97,7 +98,8 @@ export class GameScene {
     this.enemySpawn = new EnemySpawnSystem(this.world, LW, LH, this.run);
     this.enemySpawn.setTileMap(this.tileMap);
     this.enemySpawn.setSpawnPoints(enemySpawnPoints || []);
-    this.enemySpawn.setMaxAttackRange(Math.sqrt(this.LW * this.LW + this.LH * this.LH));
+    const halfScreenWidth = this.renderer.logicalWidth / 2;
+    this.enemySpawn.setMaxAttackRange(halfScreenWidth);
     this.ai = new AISystem(this.world, getBuffs);
     this.flowField = new FlowField(this.tileMap);
     this.ai.setFlowField(this.flowField);
@@ -117,7 +119,11 @@ export class GameScene {
       this.world.addComponent(p, 'Damage', { value: damage });
       this.world.addComponent(p, 'Lifetime', { remaining: 3.0 });
     });
-    this.eliteSkills.setMaxAttackRange(Math.sqrt(this.LW * this.LW + this.LH * this.LH));
+    this.eliteSkills.setMaxAttackRange(halfScreenWidth);
+
+    // Director AI — 动态难度压力系统
+    this.director = new DirectorSystem(this.world, this.run);
+    this.enemySpawn.setDirector(this.director);
 
     // Boss
     this.boss = new FinalBossController(this.world, LW, LH, {
@@ -135,7 +141,6 @@ export class GameScene {
       this.camera.shake(12, 2.0);
       if (this.boss.entity) {
         const bt = this.boss.entity.components.Transform;
-        // Boss击杀特效：圆形粒子、发光、重力、拖尾
         this.particles.emit(bt.x, bt.y, 50, {
           colors: ['#ff0000', '#ff4400', '#ff8800', '#fff'],
           speed: 200,
@@ -152,6 +157,16 @@ export class GameScene {
         });
       }
       this.run.addScore(1000);
+
+      // Defeat final boss = game victory
+      this.run.survived = true;
+      this.run.bossDefeated = true;
+      setTimeout(() => {
+        if (!this._gameOverFired) {
+          this._gameOverFired = true;
+          this.onGameOver(this.run);
+        }
+      }, 1500);
     };
 
     this.expSystem.onLevelUp = (level) => this._onLevelUp(level);
@@ -168,6 +183,7 @@ export class GameScene {
       gameTime: 0,
       rooms: this.rooms,
       tileMap: this.tileMap,
+      maxAttackRange: halfScreenWidth,
     });
 
     // Player
@@ -564,6 +580,9 @@ export class GameScene {
     this.particles.emit(pt.x, pt.y, 6, { colors: ['#ff4444', '#ff8888'], speed: 60 });
     this.camera.shake(4, 0.2);
 
+    // Director — 记录玩家受伤
+    if (this.director) this.director.recordDamage();
+
     // Thorns visual feedback
     const thorns = this._currentBuffs.thorns || 0;
     if (thorns > 0 && enemy.active) {
@@ -680,6 +699,9 @@ export class GameScene {
     const et = enemy.components.Transform;
     const isMinion = !!enemy.components.MinionTag;
 
+    // Director — 记录击杀
+    if (this.director && !isMinion) this.director.recordKill();
+
     if (!isMinion) {
       this.audio.playKill();
       const expMult = this._currentBuffs.expMult || 1;
@@ -772,6 +794,11 @@ export class GameScene {
     if (this._levelUpFlash > 0) this._levelUpFlash -= dt;
     if (this.paused) return;
 
+    // Director AI — 每帧更新压力参数
+    if (this.director) {
+      this.director.update(dt, this.player, this.run.gameTime);
+    }
+
     // Check if any boss is active (final boss or timed mini-boss, NOT supply-point minibosses)
     const bossActive = this.boss && this.boss.active;
     const timedMiniBossActive = this.supplySystem && this.supplySystem.isTimedMiniBossActive();
@@ -813,7 +840,7 @@ export class GameScene {
     }
 
     // Enemy spawn BEFORE weapon update so enemies exist when weapons try to fire
-    // Final boss: poison circle starts 60s before boss spawns
+    // Final boss: poison circle starts 60s before boss spawns (at ~10.5 min)
     if (!this.run.isEndless()) {
       // Trigger poison circle early enough for 60s shrink
       if (!this.bossSpawned && this.run.timeRemaining <= 90 && !this.poisonCircle.isActive()) {
@@ -821,7 +848,7 @@ export class GameScene {
         const ts = this.tileMap.tileSize;
         const arenaCx = bossRoom.cx * ts + ts / 2;
         const arenaCy = bossRoom.cy * ts + ts / 2;
-        const arenaRadius = Math.min(bossRoom.w, bossRoom.h) * ts * 0.4;
+        const arenaRadius = Math.min(bossRoom.w, bossRoom.h) * ts * 0.7;
         const mapMaxRadius = Math.max(this.tileMap.width, this.tileMap.height);
         this.poisonCircle.trigger(arenaCx, arenaCy, arenaRadius, mapMaxRadius);
         this.bossSpawned = false; // not yet spawned, circle is shrinking
@@ -831,7 +858,7 @@ export class GameScene {
       // Spawn boss when poison circle finishes shrinking
       if (this._finalBossArena && this.poisonCircle.state === 'stable' && !this.boss.active) {
         const { cx, cy } = this._finalBossArena;
-        const bossHp = 5000;
+        const bossHp = 100000;
         this.boss.spawn(cx, cy, bossHp);
         this.camera.shake(10, 1.0);
         this.bossSpawned = true;
@@ -840,10 +867,12 @@ export class GameScene {
       }
 
       // Keep spawning during boss fight (reduced rate)
+      this.enemySpawn.setPlayerLevel(this.expSystem.level);
       if (!this.bossSpawned) {
         this.enemySpawn.update(dt, this.run.gameTime, this.player?.components?.Transform);
       }
     } else {
+      this.enemySpawn.setPlayerLevel(this.expSystem.level);
       this.enemySpawn.update(dt, this.run.gameTime, this.player?.components?.Transform);
     }
 
@@ -1641,31 +1670,50 @@ export class GameScene {
       color: '#ff0', size: 8, align: 'center', font: 'monospace',
     });
 
-    // Boss HP bar
+    // Boss HP bar (top of screen)
     if (this.boss && this.boss.active && this.boss.entity) {
       const bossHpRatio = Math.max(0, this.boss.hp / this.boss.maxHp);
-      const bw = LW - 40;
-      const bx = 20, by = LH - 30;
-      renderer.drawRect(bx - 1, by - 1, bw + 2, 12, '#222');
-      renderer.drawRect(bx, by, bw, 10, '#333');
+      const screenW = renderer.logicalWidth;
+      const bw = screenW - 20;
+      const bx = 10, by = 4;
+      renderer.drawRect(bx - 1, by - 1, bw + 2, 14, '#222');
+      renderer.drawRect(bx, by, bw, 12, '#333');
 
       let bColor = '#e74c3c';
       if (this.boss.phase === 2) bColor = '#c0392b';
       if (this.boss.phase === 3) bColor = '#ff0000';
-      renderer.drawRect(bx, by, bw * bossHpRatio, 10, bColor);
+      renderer.drawRect(bx, by, bw * bossHpRatio, 12, bColor);
 
       const bossName = this.boss.phase === 1 ? '深渊魔神 Phase 1' :
         this.boss.phase === 2 ? '深渊魔神 Phase 2' : '深渊魔神 Phase 3';
-      renderer.drawText(bossName, bx + bw / 2, by + 1, {
-        color: '#fff', size: 8, align: 'center',
+      renderer.drawText(bossName, bx + bw / 2, by + 2, {
+        color: '#fff', size: 9, align: 'center',
       });
 
       const phaseText = this.boss.phase === 1 ? '' :
         this.boss.phase === 2 ? ' 规则变化' : ' 最终疯狂';
       if (phaseText) {
         const flash = Math.floor(run.gameTime * 4) % 2 === 0;
-        renderer.drawText(phaseText, bx + bw + 5, by + 1, {
+        renderer.drawText(phaseText, bx + bw + 5, by + 2, {
           color: flash ? '#ff0000' : '#ff4444', size: 7, align: 'left',
+        });
+      }
+    }
+
+    // Mini-boss HP bar (top of screen, below boss bar)
+    if (this.supplySystem && this.supplySystem.isTimedMiniBossActive()) {
+      const mb = this.supplySystem._timedMiniBoss;
+      if (mb && mb.entity && mb.entity.active) {
+        const mbHpRatio = Math.max(0, mb.hp / mb.maxHp);
+        const screenW = renderer.logicalWidth;
+        const bw = screenW - 20;
+        const bossOffset = (this.boss && this.boss.active) ? 18 : 0;
+        const bx = 10, by = 4 + bossOffset;
+        renderer.drawRect(bx - 1, by - 1, bw + 2, 14, '#222');
+        renderer.drawRect(bx, by, bw, 12, '#333');
+        renderer.drawRect(bx, by, bw * mbHpRatio, 12, '#9b59b6');
+        renderer.drawText('暗影领主', bx + bw / 2, by + 2, {
+          color: '#fff', size: 9, align: 'center',
         });
       }
     }
@@ -1710,13 +1758,14 @@ export class GameScene {
   }
 
   _renderMinimap() {
-    const { renderer, player, LW } = this;
+    const { renderer, player } = this;
     if (!this._minimapCanvas || !player) return;
 
     const mmW = this._minimapW;
     const mmH = this._minimapH;
-    const mmX = LW - mmW - 6;
-    const mmY = 42;
+    const screenW = renderer.logicalWidth;
+    const mmX = screenW - mmW - 6;
+    const mmY = 6;
 
     // Background border
     renderer.setAlpha(0.7);

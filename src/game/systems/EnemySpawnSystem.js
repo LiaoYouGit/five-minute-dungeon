@@ -8,7 +8,8 @@ export class EnemySpawnSystem {
     this.lh = lh;
     this.tileMap = null;
     this.runState = runState;
-    this.maxAttackRange = 500; // set via setMaxAttackRange
+    this.maxAttackRange = 500;
+    this.director = null; // Director AI system
 
     // Wave state
     this.waveNum = 0;
@@ -18,16 +19,20 @@ export class EnemySpawnSystem {
     this.waveSpawnTimer = 0;
     this.waveWarning = 0;
 
-    // Trickle - start immediately and keep spawning frequently
+    // Trickle
     this.trickleTimer = 0;
     this.trickleInterval = 0.8;
 
-    // Fixed spawn points from dungeon generator
+    // Fixed spawn points
     this.spawnPoints = [];
 
     this._minionCounter = 0;
     this.spawnCount = 0;
+    this._gameTime = 0;
+    this._playerLevel = 1;
   }
+
+  setDirector(director) { this.director = director; }
 
   setTileMap(tileMap) {
     this.tileMap = tileMap;
@@ -65,6 +70,7 @@ export class EnemySpawnSystem {
 
   update(dt, gameTime, playerTransform) {
     if (gameTime === undefined) gameTime = 0;
+    this._gameTime = gameTime;
 
     const px = playerTransform ? playerTransform.x : 0;
     const py = playerTransform ? playerTransform.y : 0;
@@ -98,7 +104,17 @@ export class EnemySpawnSystem {
       this.waveSpawnTimer -= dt;
       if (this.waveSpawnTimer <= 0 && this.waveSpawnQueue.length > 0) {
         const group = this.waveSpawnQueue[0];
-        const burstSize = Math.min(group.count, 2 + Math.floor(this.waveNum / 3));
+
+        // Director压力加成
+        let spawnMult = 1;
+        if (this.director) {
+          const params = this.director.getPressureParams(this._gameTime);
+          spawnMult = params.spawnCountMult;
+        }
+
+        const baseBurst = 2 + Math.floor(this.waveNum / 3);
+        const burstSize = Math.ceil(Math.min(group.count, baseBurst) * spawnMult);
+
         for (let i = 0; i < burstSize && group.count > 0; i++) {
           this._spawnAtFixedPoint(group.enemyDef, this.waveNum, px, py);
           group.count--;
@@ -126,21 +142,43 @@ export class EnemySpawnSystem {
       const offset = 8;
       const sx = point.x + (Math.random() - 0.5) * offset;
       const sy = point.y + (Math.random() - 0.5) * offset;
-      this._createEnemy(sx, sy, enemyDef, waveNum);
+      this._createEnemy(sx, sy, enemyDef, waveNum, this._gameTime);
       this.spawnCount++;
     }
   }
 
   /** Trickle spawn at fixed points */
   _trickleSpawn(gameTime, px, py) {
+    // 基础数量 + 时间加成
     const baseCount = 2;
     const timeBonus = Math.floor(gameTime / 90);
-    const count = baseCount + timeBonus;
+
+    // Director压力加成
+    let spawnMult = 1;
+    if (this.director) {
+      const params = this.director.getPressureParams(gameTime);
+      spawnMult = params.spawnCountMult;
+    }
+
+    const count = Math.ceil((baseCount + timeBonus) * spawnMult);
 
     for (let i = 0; i < count; i++) {
       let tmpl = rollEnemyType(gameTime);
-      if (gameTime < 60 && tmpl.archetype === ARCHETYPE.ELITE) {
+      // 早期(0-2分钟)不生成精英
+      if (gameTime < 120 && tmpl.archetype === ARCHETYPE.ELITE) {
         tmpl = rollEnemyType(30);
+      }
+      // Director精英概率加成
+      if (this.director && gameTime >= 120 && tmpl.archetype !== ARCHETYPE.ELITE) {
+        const params = this.director.getPressureParams(gameTime);
+        if (Math.random() < params.eliteChanceBonus) {
+          // 强制生成精英
+          const elitePool = [
+            { id: 'vampire', hp: 5, speed: 45, size: 12, score: 60, archetype: ARCHETYPE.ELITE },
+            { id: 'ghost_king', hp: 8, speed: 35, size: 16, score: 80, archetype: ARCHETYPE.ELITE },
+          ];
+          tmpl = elitePool[Math.floor(Math.random() * elitePool.length)];
+        }
       }
       this._spawnAtFixedPoint(tmpl, Math.max(1, this.waveNum), px, py);
     }
@@ -160,7 +198,7 @@ export class EnemySpawnSystem {
             const tx = cx + dx, ty = cy + dy;
             if (tx >= 0 && ty >= 0 && tx < this.tileMap.cols && ty < this.tileMap.rows) {
               if (!this.tileMap.isWall(tx, ty)) {
-                this._createEnemy(tx * ts + ts / 2, ty * ts + ts / 2, tmpl, waveNum);
+                this._createEnemy(tx * ts + ts / 2, ty * ts + ts / 2, tmpl, waveNum, gameTime);
                 return;
               }
             }
@@ -168,7 +206,7 @@ export class EnemySpawnSystem {
         }
       }
     }
-    this._createEnemy(x, y, tmpl, waveNum);
+    this._createEnemy(x, y, tmpl, waveNum, gameTime);
   }
 
   spawnMinion(x, y, hp) {
@@ -188,11 +226,51 @@ export class EnemySpawnSystem {
     this.world.addComponent(e, 'EnemyAI', { type: 'chase', timer: 0 });
   }
 
-  _createEnemy(x, y, tmpl, waveNum) {
-    const waveHpMult = 1 + waveNum * 0.15;
-    const waveSpeedBonus = waveNum * 0.8;
-    const stageHpMult = this.runState ? this.runState.getStageHpMult() : 1;
-    const finalHpMult = waveHpMult * stageHpMult;
+  // ── 新成长公式 ──────────────────────────────────────────
+
+  /**
+   * 计算怪物成长属性
+   * 普通怪: HP = base + level×12 + minute×8, ATK = base + level×3 + minute×2, SPD = base + minute×0.8
+   * 精英怪: HP×4, ATK×2, SPD×1.15
+   */
+  _calcEnemyStats(tmpl, gameTime) {
+    const minute = gameTime / 60;
+    const playerLevel = this._playerLevel || 1;
+    const isElite = tmpl.archetype === ARCHETYPE.ELITE;
+
+    // 基础属性
+    const baseHp = tmpl.hp;
+    const baseAtk = 3; // 基础攻击力
+    const baseSpeed = tmpl.speed;
+
+    // 时间成长
+    let hp = baseHp + playerLevel * 12 + minute * 8;
+    let atk = baseAtk + playerLevel * 3 + minute * 2;
+    let speed = baseSpeed + minute * 0.8;
+
+    // 精英怪倍率
+    if (isElite) {
+      hp *= 4;
+      atk *= 2;
+      speed *= 1.15;
+    }
+
+    // 取整
+    hp = Math.ceil(hp);
+    atk = Math.ceil(atk);
+    speed = Math.ceil(speed);
+
+    return { hp, atk, speed, isElite };
+  }
+
+  setPlayerLevel(level) { this._playerLevel = level; }
+
+  _createEnemy(x, y, tmpl, waveNum, gameTime) {
+    // 使用新成长公式
+    const stats = this._calcEnemyStats(tmpl, gameTime || 0);
+    const hpValue = stats.hp;
+    const dmgValue = stats.atk;
+    const speedValue = stats.speed;
 
     const e = this.world.createEntity();
     this.world.addComponent(e, 'Transform', { x, y });
@@ -200,14 +278,12 @@ export class EnemySpawnSystem {
     const spriteSize = tmpl.size;
     this.world.addComponent(e, 'Sprite', { w: spriteSize, h: spriteSize, color: tmpl.color, imageKey: tmpl.id });
 
-    this.world.addComponent(e, 'Health', { hp: Math.ceil(tmpl.hp * finalHpMult), maxHp: Math.ceil(tmpl.hp * finalHpMult) });
+    this.world.addComponent(e, 'Health', { hp: hpValue, maxHp: hpValue });
     this.world.addComponent(e, 'EnemyTag', {});
-    // Scale damage with stage: 3 base, +2 per stage
-    const stage = this.runState ? this.runState.getStage() : 1;
-    this.world.addComponent(e, 'Damage', { value: 3 + stage * 2 });
+    this.world.addComponent(e, 'Damage', { value: dmgValue });
     this.world.addComponent(e, 'Collider', { radius: spriteSize / 2 });
     this.world.addComponent(e, 'ScoreValue', { value: tmpl.score });
-    this.world.addComponent(e, 'Speed', { value: tmpl.speed + waveSpeedBonus });
+    this.world.addComponent(e, 'Speed', { value: speedValue });
 
     const aiType = tmpl.ai || this._aiFromArchetype(tmpl.archetype);
     this.world.addComponent(e, 'EnemyAI', { type: aiType, timer: 0 });
@@ -226,7 +302,7 @@ export class EnemySpawnSystem {
       case ARCHETYPE.EXPLODER:
         this.world.addComponent(e, 'ExplodeOnDeath', {
           radius: tmpl.explodeRadius || 50,
-          damage: 15,
+          damage: dmgValue,
         });
         break;
       case ARCHETYPE.SUMMONER:
@@ -339,8 +415,7 @@ export class EnemySpawnSystem {
       ? (control.type === 'slow' ? 'enemy_projectile_ice' : 'enemy_projectile')
       : 'frost_mage_projectile';
 
-    const stage = this.runState ? this.runState.getStage() : 1;
-    const projDmg = 3 + stage * 2;
+    const projDmg = e.components.Damage ? e.components.Damage.value : (3 + (this.runState ? this.runState.getStage() : 1) * 2);
     const p = this.world.createEntity();
     this.world.addComponent(p, 'Transform', { x: et.x, y: et.y });
     this.world.addComponent(p, 'Velocity', { x: Math.cos(angle) * ranged.projectileSpeed, y: Math.sin(angle) * ranged.projectileSpeed });

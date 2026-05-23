@@ -6,15 +6,15 @@ const TYPE_META = {
   heal:     { color: '#2ecc71', idleColor: '#1a4a3a', label: '治疗援助',   icon: '🩹', warningDuration: 30, activeDuration: 25, cycleDuration: 90 },
   bomb:     { color: '#e74c3c', idleColor: '#4a1a1a', label: '武力援助',   icon: '💥', warningDuration: 30, activeDuration: 6,  cycleDuration: 100 },
   mission:  { color: '#f1c40f', idleColor: '#4a4020', label: '任务援助',   icon: '🎯', warningDuration: 30, activeDuration: 20, cycleDuration: 120 },
-  miniboss: { color: '#9b59b6', idleColor: '#3a1a4a', label: '小Boss援助', icon: '👑', warningDuration: 30, activeDuration: 60, cycleDuration: 300 }, // longer cycle, mini boss spawns at 4min via separate trigger
+  miniboss: { color: '#9b59b6', idleColor: '#3a1a4a', label: '小Boss援助', icon: '👑', warningDuration: 30, activeDuration: 60, cycleDuration: 360 }, // mini boss spawns at ~9min via separate trigger
 };
 
 export class SupplySystem {
   constructor(world, supplyPoints, deps) {
     this.world = world;
-    this.deps = deps;  // { expSystem, particles, camera, audio, dmgNumbers, enemySpawnSystem, LW, LH }
+    this.deps = deps;
     this.miniBosses = [];
-    this.miniBossSpawned = false; // Track if 4-minute mini boss spawned
+    this.miniBossSpawned = false; // Track if mini boss spawned
     this.miniBossPoisonCircle = new PoisonCircleSystem();
     this._miniBossArena = null;
     this._miniBossPoisonTriggered = false;
@@ -43,8 +43,8 @@ export class SupplySystem {
 
   // Spawn mini boss at specific position (called when gameTime >= 240)
   spawnMiniBossAt(x, y) {
-    const hp = 800 + Math.floor((this.deps.gameTime || 150) / 60) * 200;
-    const mb = new MiniBossController(this.world, this.deps.LW, this.deps.LH);
+    const hp = 50000;
+    const mb = new MiniBossController(this.world, this.deps.LW, this.deps.LH, this.deps.maxAttackRange);
     mb.spawn(x, y, hp, (dx, dy) => {
       // 大量经验奖励（150 EXP）
       if (this.deps.expSystem) {
@@ -89,8 +89,8 @@ export class SupplySystem {
       }
       return { phase: 'spawning' };
     }
-    if (gameTime >= 60) {
-      return { phase: 'warning', timeLeft: Math.ceil(90 - gameTime) };
+    if (gameTime >= 420) { // 7分钟开始显示警告
+      return { phase: 'warning', timeLeft: Math.ceil(480 - gameTime) };
     }
     return null;
   }
@@ -107,7 +107,7 @@ export class SupplySystem {
     const ts = tileMap.tileSize;
     const cx = room.cx * ts + ts / 2;
     const cy = room.cy * ts + ts / 2;
-    const radius = Math.min(room.w, room.h) * ts * 0.4;
+    const radius = Math.min(room.w, room.h) * ts * 0.7;
     const maxR = Math.max(this.deps.LW, this.deps.LH) * 2;
     this.miniBossPoisonCircle.trigger(cx, cy, radius, maxR);
     this._miniBossArena = { cx, cy, radius };
@@ -119,9 +119,9 @@ export class SupplySystem {
     const pt = player.components.Transform;
     const ph = player.components.Health;
 
-    // Mini-boss poison circle: trigger at gameTime 90 (1.5 min), spawns at ~150
+    // Mini-boss poison circle: trigger at gameTime 480 (8 min), spawns at ~540
     const gameTime = this.deps.gameTime || 0;
-    if (gameTime >= 90 && !this._miniBossPoisonTriggered && !this.miniBossSpawned) {
+    if (gameTime >= 480 && !this._miniBossPoisonTriggered && !this.miniBossSpawned) {
       this._triggerMiniBossPoison();
     }
 
@@ -190,8 +190,8 @@ export class SupplySystem {
     if (this.deps.camera) this.deps.camera.shake(3, 0.3);
 
     if (p.type === 'miniboss') {
-      const hp = 300 + Math.floor((this.deps.gameTime || 0) / 30) * 50;
-      const mb = new MiniBossController(this.world, this.deps.LW, this.deps.LH);
+      const hp = 1500 + Math.floor((this.deps.gameTime || 0) / 30) * 250;
+      const mb = new MiniBossController(this.world, this.deps.LW, this.deps.LH, this.deps.maxAttackRange);
       mb.spawn(p.x, p.y, hp, (dx, dy) => {
         // 大量经验奖励（96 EXP）
         if (this.deps.expSystem) {
